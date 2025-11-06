@@ -51,10 +51,16 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="profile"
+        name="notifications"
         options={{
-          title: 'Me',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="person.fill" color={color} />,
+          href: null, // Hide from tab bar
+        }}
+      />
+      <Tabs.Screen
+        name="messages"
+        options={{
+          title: 'Messages',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="message.fill" color={color} />,
         }}
       />
       <Tabs.Screen
@@ -62,6 +68,12 @@ export default function TabLayout() {
         options={{
           title: 'Settings',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="gearshape.fill" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          href: null, // Hide from tab bar, will be accessed from Settings
         }}
       />
     </Tabs>

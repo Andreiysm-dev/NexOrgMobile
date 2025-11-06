@@ -122,7 +122,7 @@ export default function OrgDirectoryScreen() {
           <ThemedText style={[styles.headerTitle, { color: textColor }]}>Organizations</ThemedText>
           <TouchableOpacity 
             style={styles.notificationButton}
-            onPress={() => Alert.alert('Notifications', 'Notifications feature coming soon!')}
+            onPress={() => router.push('/(tabs)/notifications')}
           >
             <IconSymbol name="bell" size={24} color={metaColor} />
           </TouchableOpacity>

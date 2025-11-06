@@ -30,6 +30,7 @@ const MAPPING = {
   'magnifyingglass': 'search',
   'eye': 'visibility',
   'eye.slash': 'visibility-off',
+  'line.3.horizontal': 'menu',
 
   // Org detail tabs
   'calendar': 'event',
@@ -42,6 +43,16 @@ const MAPPING = {
   // Misc from template
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
+  
+  // Social actions
+  'heart': 'favorite-border',
+  'heart.fill': 'favorite',
+  'message': 'chat-bubble-outline',
+  'message.fill': 'chat-bubble',
+  'square.and.arrow.up': 'share',
+  'square.and.pencil': 'edit',
+  'xmark.circle.fill': 'cancel',
+  'bell.fill': 'notifications',
 } as IconMapping;
 
 /**

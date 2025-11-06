@@ -5,8 +5,15 @@ import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import React, { useState, useEffect } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, View, Image, RefreshControl, Alert } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchUserOrganizations, fetchUserAnnouncements, fetchAllPosts } from '@/lib/api';
 import { useRouter } from 'expo-router';
+import { SideMenu } from '@/components/SideMenu';
+import { supabase } from '@/lib/supabase';
+import { PostCard } from '@/components/feed/PostCard';
+import { AnnouncementCard } from '@/components/feed/AnnouncementCard';
+import { PollCard } from '@/components/feed/PollCard';
+import { PostModal } from '@/components/feed/PostModal';
 
 // Expandable Text Component for Posts (2 lines max) - Same as organization page
 const ExpandablePostText = ({ content, colors }: { content: string, colors: any }) => {
@@ -35,14 +42,21 @@ const ExpandablePostText = ({ content, colors }: { content: string, colors: any 
 
 export default function HomeScreen() {
   const colorScheme = useColorScheme();
+  const colors = Colors[colorScheme ?? 'light'];
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [announcements, setAnnouncements] = useState<any[]>([]);
   const [posts, setPosts] = useState<any[]>([]);
+  const [polls, setPolls] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [scrollY, setScrollY] = useState(0);
   const [showOrgSection, setShowOrgSection] = useState(true);
+  const [sideMenuVisible, setSideMenuVisible] = useState(false);
+  const [selectedPost, setSelectedPost] = useState<any>(null);
+  const [isPostModalVisible, setIsPostModalVisible] = useState(false);
+  const [bookmarkedPosts, setBookmarkedPosts] = useState<Set<string>>(new Set());
 
   const backgroundColor = Colors[colorScheme ?? 'light'].background;
   const textColor = Colors[colorScheme ?? 'light'].text;
@@ -52,7 +66,25 @@ export default function HomeScreen() {
 
   // Navigation functions
   const handleNotifications = () => {
-    Alert.alert('Notifications', 'Notifications feature coming soon!');
+    router.push('/(tabs)/notifications');
+  };
+
+  const handleMenuPress = () => {
+    setSideMenuVisible(true);
+  };
+
+  const handleSideMenuClose = () => {
+    setSideMenuVisible(false);
+  };
+
+  const handleProfilePress = () => {
+    setSideMenuVisible(false);
+    Alert.alert('Profile', 'Profile feature coming soon!');
+  };
+
+  const handleSettingsPress = () => {
+    setSideMenuVisible(false);
+    Alert.alert('Settings', 'Settings feature coming soon!');
   };
 
   const handleOrganizationPress = (orgId: string, orgName?: string) => {
@@ -69,6 +101,39 @@ export default function HomeScreen() {
     router.push('/explore');
   };
 
+  // Post modal handlers
+  const handlePostPress = (post: any) => {
+    setSelectedPost(post);
+    setIsPostModalVisible(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsPostModalVisible(false);
+    setSelectedPost(null);
+  };
+
+  const handleLike = async (postId: string) => {
+    // Like is handled within PostModal component
+    console.log('Post liked:', postId);
+  };
+
+  const handleShare = async (postId: string) => {
+    // TODO: Implement share functionality
+    console.log('Share post:', postId);
+  };
+
+  const handleBookmark = (postId: string) => {
+    setBookmarkedPosts(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(postId)) {
+        newSet.delete(postId);
+      } else {
+        newSet.add(postId);
+      }
+      return newSet;
+    });
+  };
+
   const getTimeAgo = (dateString: string) => {
     const now = new Date();
     const date = new Date(dateString);
@@ -83,21 +148,104 @@ export default function HomeScreen() {
   const loadData = async () => {
     try {
       setLoading(true);
-      console.log('Loading home screen data...');
+      
+      // Load organizations
+      const orgsResponse = await fetchUserOrganizations();
+      
+      if (orgsResponse && Array.isArray(orgsResponse) && orgsResponse.length > 0) {
+        setOrganizations(orgsResponse);
+      } else if (orgsResponse && (orgsResponse as any).success && (orgsResponse as any).organizations) {
+        setOrganizations((orgsResponse as any).organizations);
+      } else {
+        setOrganizations([]);
+      }
+      
+      // Load announcements
+      const announcementsResponse = await fetchUserAnnouncements();
+      
+      if (announcementsResponse && Array.isArray(announcementsResponse)) {
+        setAnnouncements(announcementsResponse);
+      } else if (announcementsResponse && (announcementsResponse as any).success && (announcementsResponse as any).announcements) {
+        setAnnouncements((announcementsResponse as any).announcements);
+      } else {
+        setAnnouncements([]);
+      }
+      
+      // Load posts
+      const postsResponse = await fetchAllPosts();
+      
+      if (postsResponse && Array.isArray(postsResponse)) {
+        setPosts(postsResponse);
+      } else if (postsResponse && (postsResponse as any).success && (postsResponse as any).posts) {
+        setPosts((postsResponse as any).posts);
+      } else {
+        setPosts([]);
+      }
 
-      const [orgsData, announcementsData, postsData] = await Promise.all([
-        fetchUserOrganizations(),
-        fetchUserAnnouncements(),
-        fetchAllPosts()
-      ]);
+      // Load polls from user's organizations only
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && orgsResponse && Array.isArray(orgsResponse)) {
+        const userOrgIds = orgsResponse.map((org: any) => org.organizations?.org_id || org.org_id || org.id);
+        
+        if (userOrgIds.length > 0) {
+          const { data: userPolls } = await supabase
+            .from('polls')
+            .select(`
+              *,
+              organizations!inner(org_id, org_name, org_pic)
+            `)
+            .in('org_id', userOrgIds)
+            .order('created_at', { ascending: false });
 
-      setOrganizations(orgsData || []);
-      setAnnouncements(announcementsData || []);
-      setPosts(postsData || []);
+          if (userPolls) {
+            const pollIds = userPolls.map((p: any) => p.poll_id);
+            
+            const { data: options } = await supabase
+              .from('poll_options')
+              .select('*')
+              .in('poll_id', pollIds);
 
-      console.log('Home screen data loaded successfully');
+            const { data: userVotes } = await supabase
+              .from('poll_votes')
+              .select('poll_id, option_id')
+              .eq('user_id', user.id)
+              .in('poll_id', pollIds);
+
+            const optionsByPoll = (options || []).reduce((acc: any, option: any) => {
+              if (!acc[option.poll_id]) acc[option.poll_id] = [];
+              acc[option.poll_id].push(option);
+              return acc;
+            }, {});
+
+            const votesByPoll = (userVotes || []).reduce((acc: any, vote: any) => {
+              if (!acc[vote.poll_id]) acc[vote.poll_id] = [];
+              acc[vote.poll_id].push(vote.option_id);
+              return acc;
+            }, {});
+
+            const formattedPolls = userPolls.map((poll: any) => {
+              const pollOptions = optionsByPoll[poll.poll_id] || [];
+              const totalVotes = pollOptions.reduce((sum: number, opt: any) => sum + (opt.vote_count || 0), 0);
+              const now = new Date();
+              const expiresAt = new Date(poll.expires_at);
+              const isExpired = now > expiresAt;
+
+              return {
+                ...poll,
+                options: pollOptions,
+                total_votes: totalVotes,
+                user_votes: votesByPoll[poll.poll_id] || [],
+                is_expired: isExpired
+              };
+            });
+
+            setPolls(formattedPolls);
+          }
+        }
+      }
+      
     } catch (error) {
-      console.error('Error loading home screen data:', error);
+      console.error('Error loading homepage data:', error);
       Alert.alert('Error', 'Failed to load data. Please try again.');
     } finally {
       setLoading(false);
@@ -132,9 +280,12 @@ export default function HomeScreen() {
   return (
     <View style={[styles.container, { backgroundColor }]}>
       {/* Reddit-style Header */}
-      <View style={[styles.header, { backgroundColor: cardBackground, borderBottomColor: borderColor }]}>
+      <View style={[styles.header, { backgroundColor: cardBackground, borderBottomColor: borderColor, paddingTop: insets.top + 10 }]}>
         <View style={styles.headerContent}>
           <View style={styles.logoContainer}>
+            <TouchableOpacity style={styles.menuButton} onPress={handleMenuPress}>
+              <IconSymbol name="line.3.horizontal" size={22} color={metaColor} />
+            </TouchableOpacity>
             <ThemedText style={[styles.logo, { color: textColor }]}>NexOrg</ThemedText>
           </View>
           <View style={styles.headerActions}>
@@ -198,7 +349,7 @@ export default function HomeScreen() {
         </View>
         {/* Reddit-style Feed Cards */}
         {(() => {
-          // Combine posts and announcements with type indicators
+          // Combine posts, announcements, and polls with type indicators
           const combinedFeed = [
             ...posts.map((post, index) => ({
               ...post,
@@ -211,6 +362,12 @@ export default function HomeScreen() {
               type: 'announcement',
               timestamp: announcement.createdAt,
               key: `announcement-${announcement.id}`,
+            })),
+            ...polls.map((poll) => ({
+              ...poll,
+              type: 'poll',
+              timestamp: poll.created_at,
+              key: `poll-${poll.poll_id}`,
             }))
           ];
 
@@ -225,172 +382,119 @@ export default function HomeScreen() {
             <View style={styles.feedContainer}>
               {combinedFeed.map((item) => {
                 if (item.type === 'post') {
-                  const post = item;
-                  const colors = Colors[colorScheme ?? 'light'];
                   return (
-                    <View key={post.key} style={[styles.redditStylePost, { backgroundColor: cardBackground, borderBottomColor: borderColor }]}>
-                      {/* Post header with org avatar and info */}
-                      <View style={styles.redditStylePostHeader}>
-                        <TouchableOpacity 
-                          style={styles.communityInfo}
-                          onPress={() => handleOrganizationPress(post.org_id, post.organizations?.org_name)}
-                        >
-                          <View style={[styles.redditStyleOrgAvatar, { backgroundColor: '#800020' }]}>
-                            {post.organizations?.org_pic ? (
-                              <Image 
-                                source={{ uri: post.organizations.org_pic }} 
-                                style={styles.redditStyleOrgAvatarImage}
-                                resizeMode="cover"
-                              />
-                            ) : (
-                              <ThemedText style={styles.redditStyleOrgAvatarText}>
-                                {post.organizations?.org_name?.charAt(0) || 'O'}
-                              </ThemedText>
-                            )}
-                          </View>
-                          <View style={styles.redditHeaderInfo}>
-                            <View style={styles.redditInlineHeader}>
-                              <ThemedText style={[styles.redditOrgNameHeader, { color: textColor }]}>
-                                {post.organizations?.org_name || 'Organization'}
-                              </ThemedText>
-                              <ThemedText style={[styles.redditPostTimeInline, { color: metaColor }]}>
-                                • {getTimeAgo(post.created_at)}
-                              </ThemedText>
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                      </View>
-
-                      {/* Post title */}
-                      {post.title && (
-                        <ThemedText style={[styles.redditPostTitleMain, { color: textColor }]}>
-                          {post.title}
-                        </ThemedText>
-                      )}
-
-                      {/* Post content with 2-line limit */}
-                      <ExpandablePostText 
-                        content={post.content}
-                        colors={colors}
-                      />
-
-                      {/* Media if present */}
-                      {post.media_url && (
-                        <View style={styles.redditPostImageWrapper}>
-                          <Image 
-                            source={{ uri: post.media_url }} 
-                            style={styles.redditPostImageMain}
-                            resizeMode="cover"
-                          />
-                        </View>
-                      )}
-
-                      {/* Text-based action bar */}
-                      <View style={styles.redditStyleActionBar}>
-                        <TouchableOpacity style={styles.redditStyleActionButton}>
-                          <ThemedText style={[styles.redditStyleActionText, { color: metaColor }]}>
-                            {post.likes || 0} likes
-                          </ThemedText>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.redditStyleActionButton}>
-                          <ThemedText style={[styles.redditStyleActionText, { color: metaColor }]}>
-                            {post.comment_count || 0} comments
-                          </ThemedText>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.redditStyleActionButton}>
-                          <ThemedText style={[styles.redditStyleActionText, { color: metaColor }]}>
-                            Share
-                          </ThemedText>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
+                    <PostCard 
+                      key={item.key}
+                      post={item}
+                      onPress={() => handlePostPress(item)}
+                      onLikeUpdate={(postId, liked, newCount) => {
+                        // Update posts state with new like info
+                        setPosts(prev => prev.map(p => 
+                          p.post_id === postId ? { ...p, user_has_liked: liked, like_count: newCount, likes: newCount } : p
+                        ));
+                      }}
+                    />
                   );
                 } else if (item.type === 'announcement') {
-                  const announcement = item;
-                  const colors = Colors[colorScheme ?? 'light'];
                   return (
-                    <View key={announcement.key} style={[styles.redditStylePost, { backgroundColor: cardBackground, borderBottomColor: borderColor }]}>
-                      {/* Post header with org avatar and info */}
-                      <View style={styles.redditStylePostHeader}>
-                        <TouchableOpacity 
-                          style={styles.communityInfo}
-                          onPress={() => handleOrganizationPress(announcement.orgId, announcement.orgName)}
-                        >
-                          <View style={[styles.redditStyleOrgAvatar, { backgroundColor: '#800020' }]}>
-                            {announcement.orgPic ? (
-                              <Image 
-                                source={{ uri: announcement.orgPic }} 
-                                style={styles.redditStyleOrgAvatarImage}
-                                resizeMode="cover"
-                              />
-                            ) : (
-                              <ThemedText style={styles.redditStyleOrgAvatarText}>
-                                {announcement.orgName?.charAt(0) || 'O'}
-                              </ThemedText>
-                            )}
-                          </View>
-                          <View style={styles.redditHeaderInfo}>
-                            <View style={styles.redditInlineHeader}>
-                              <ThemedText style={[styles.redditOrgNameHeader, { color: textColor }]}>
-                                {announcement.orgName}
-                              </ThemedText>
-                              <View style={styles.announcementTag}>
-                                <ThemedText style={styles.announcementTagText}>ANNOUNCEMENT</ThemedText>
-                              </View>
-                              <ThemedText style={[styles.redditPostTimeInline, { color: metaColor }]}>
-                                • {getTimeAgo(announcement.createdAt)}
-                              </ThemedText>
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                      </View>
+                    <AnnouncementCard 
+                      key={item.key}
+                      announcement={item}
+                    />
+                  );
+                } else if (item.type === 'poll') {
+                  return (
+                    <PollCard
+                      key={item.key}
+                      poll={{
+                        poll_id: item.poll_id,
+                        question: item.question,
+                        options: item.options,
+                        total_votes: item.total_votes,
+                        expires_at: item.expires_at,
+                        allow_multiple: item.allow_multiple,
+                        visibility: item.visibility,
+                        created_at: item.created_at,
+                        user_votes: item.user_votes,
+                        is_expired: item.is_expired,
+                        organizations: item.organizations
+                      }}
+                      onVote={async (pollId, optionIds) => {
+                        try {
+                          const { data: { user } } = await supabase.auth.getUser();
+                          if (!user) {
+                            Alert.alert('Error', 'You must be logged in to vote');
+                            return;
+                          }
 
-                      {/* Announcement title */}
-                      <ThemedText style={[styles.redditPostTitleMain, { color: textColor }]}>
-                        {announcement.title}
-                      </ThemedText>
+                          const { data: existingVotes } = await supabase
+                            .from('poll_votes')
+                            .select('vote_id, option_id')
+                            .eq('poll_id', pollId)
+                            .eq('user_id', user.id);
 
-                      {/* Announcement content with 2-line limit */}
-                      <ExpandablePostText 
-                        content={announcement.subtitle || announcement.content}
-                        colors={colors}
-                      />
+                          const hasExistingVotes = existingVotes && existingVotes.length > 0;
 
-                      {/* Image if available */}
-                      {(() => {
-                        // Debug: Log full announcement object and available fields
-                        console.log('=== HOME PAGE ANNOUNCEMENT DEBUG ===');
-                        console.log('Full announcement object:', announcement);
-                        console.log('Available fields:', Object.keys(announcement));
-                        console.log('Image field:', announcement.image);
-                        console.log('Media URL field:', announcement.media_url);
-                        
-                        const imageUrl = announcement.image || 
-                                        announcement.media_url || 
-                                        announcement.imageUrl || 
-                                        announcement.picture ||
-                                        announcement.img;
-                        
-                        return imageUrl ? (
-                          <View style={styles.redditPostImageWrapper}>
-                            <Image 
-                              source={{ uri: imageUrl }} 
-                              style={styles.redditPostImageMain}
-                              resizeMode="cover"
-                            />
-                          </View>
-                        ) : null;
-                      })()}
+                          if (hasExistingVotes) {
+                            const oldOptionIds = existingVotes.map((v: any) => v.option_id);
+                            
+                            await supabase
+                              .from('poll_votes')
+                              .delete()
+                              .eq('poll_id', pollId)
+                              .eq('user_id', user.id);
 
-                      {/* Text-based action bar */}
-                      <View style={styles.redditStyleActionBar}>
-                        <TouchableOpacity style={styles.redditStyleActionButton}>
-                          <ThemedText style={[styles.redditStyleActionText, { color: metaColor }]}>
-                            Share
-                          </ThemedText>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
+                            for (const optionId of oldOptionIds) {
+                              const { data: option } = await supabase
+                                .from('poll_options')
+                                .select('vote_count')
+                                .eq('option_id', optionId)
+                                .single();
+
+                              if (option && option.vote_count > 0) {
+                                await supabase
+                                  .from('poll_options')
+                                  .update({ vote_count: option.vote_count - 1 })
+                                  .eq('option_id', optionId);
+                              }
+                            }
+                          }
+
+                          const votesToInsert = optionIds.map(optionId => ({
+                            poll_id: pollId,
+                            user_id: user.id,
+                            option_id: optionId
+                          }));
+
+                          const { error: voteError } = await supabase
+                            .from('poll_votes')
+                            .insert(votesToInsert);
+
+                          if (voteError) throw new Error('Failed to record vote');
+
+                          for (const optionId of optionIds) {
+                            const { data: option } = await supabase
+                              .from('poll_options')
+                              .select('vote_count')
+                              .eq('option_id', optionId)
+                              .single();
+
+                            if (option) {
+                              await supabase
+                                .from('poll_options')
+                                .update({ vote_count: (option.vote_count || 0) + 1 })
+                                .eq('option_id', optionId);
+                            }
+                          }
+
+                          Alert.alert('Success', hasExistingVotes ? 'Your vote has been updated!' : 'Your vote has been recorded!');
+                          await loadData();
+                        } catch (error) {
+                          console.error('Failed to vote on poll:', error);
+                          Alert.alert('Error', error instanceof Error ? error.message : 'Failed to submit vote. Please try again.');
+                        }
+                      }}
+                    />
                   );
                 }
                 return null;
@@ -448,6 +552,27 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
       )}
+
+      {/* Side Menu */}
+      <SideMenu
+        visible={sideMenuVisible}
+        onClose={handleSideMenuClose}
+        organizations={organizations}
+        onOrganizationPress={handleOrganizationPress}
+        onProfilePress={handleProfilePress}
+        onSettingsPress={handleSettingsPress}
+      />
+
+      {/* Post Modal */}
+      <PostModal
+        visible={isPostModalVisible}
+        post={selectedPost}
+        onClose={handleCloseModal}
+        onLike={handleLike}
+        onShare={handleShare}
+        onBookmark={handleBookmark}
+        isBookmarked={selectedPost ? bookmarkedPosts.has(selectedPost.id || selectedPost.post_id) : false}
+      />
     </View>
   );
 }
@@ -458,7 +583,6 @@ const styles = StyleSheet.create({
   },
   // Reddit-style Header
   header: {
-    paddingTop: 50,
     paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
@@ -472,7 +596,11 @@ const styles = StyleSheet.create({
   logoContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
+  },
+  menuButton: {
+    padding: 8,
+    borderRadius: 8,
   },
   logoIcon: {
     width: 32,
@@ -721,57 +849,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
-  // Reddit-style Post Layout (same as organization page)
-  redditStylePost: {
-    paddingVertical: 5,
-    paddingHorizontal: 5,
-    borderBottomWidth: 1,
-  },
-  redditStylePostHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  redditStyleOrgAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#800020',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  redditStyleOrgAvatarImage: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-  },
-  redditStyleOrgAvatarText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  redditHeaderInfo: {
-    flex: 1,
-  },
-  redditInlineHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  redditOrgNameHeader: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  redditPostTimeInline: {
-    fontSize: 10,
-    marginLeft: 4,
-  },
-  redditPostTitleMain: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 6,
-    lineHeight: 18,
-  },
+  // Styles for ExpandablePostText component
   redditPostTextCompact: {
     fontSize: 12,
     lineHeight: 16,
@@ -780,48 +858,6 @@ const styles = StyleSheet.create({
   showMoreInline: {
     fontSize: 14,
     fontWeight: '600',
-  },
-  redditPostImageWrapper: {
-    marginVertical: 8,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  redditPostImageMain: {
-    width: '100%',
-    height: 200,
-  },
-  redditStyleActionBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    marginTop: 8,
-    paddingHorizontal: 16,
-  },
-  redditStyleActionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  redditStyleActionText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  announcementTag: {
-    marginLeft: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: '#800020',
-  },
-  announcementTagText: {
-    fontSize: 8,
-    fontWeight: 'bold',
-    color: 'white',
-    letterSpacing: 0.5,
   },
   feedContainer: {
     paddingHorizontal: 16,

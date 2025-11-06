@@ -22,17 +22,16 @@ import { canPostAnnouncements, canManageMembers } from '@/lib/mockRoles';
 const { width } = Dimensions.get('window');
 
 interface FormData {
-  title: string;
-  acronym: string;
-  description: string;
   department: string;
   dean: string;
   allowOutsideDepartment: boolean;
   tags: string[];
-  profilePic: string;
-  coverPic: string;
   advisers: string[];
-  officers: { position: string; email: string }[];
+  socials: {
+    facebook_url: string;
+    website_url: string;
+    contact_email: string;
+  };
 }
 
 interface Department {
@@ -57,17 +56,16 @@ export default function OrganizationSettings() {
   
   // Form state
   const [formData, setFormData] = useState<FormData>({
-    title: '',
-    acronym: '',
-    description: '',
     department: '',
     dean: '',
     allowOutsideDepartment: false,
     tags: [],
-    profilePic: '',
-    coverPic: '',
     advisers: ['', ''],
-    officers: [{ position: '', email: '' }]
+    socials: {
+      facebook_url: '',
+      website_url: '',
+      contact_email: ''
+    }
   });
 
   // Modal states
@@ -98,17 +96,16 @@ export default function OrganizationSettings() {
       
       // Populate form with existing data
       setFormData({
-        title: org.title || '',
-        acronym: org.acronym || '',
-        description: org.description || '',
         department: org.department || '',
         dean: org.dean || '',
         allowOutsideDepartment: org.allowOutsideDepartment || false,
         tags: org.tags?.map((tag: any) => tag.name) || [],
-        profilePic: org.org_pic || '',
-        coverPic: org.org_coverpic || '',
         advisers: org.advisers?.map((a: any) => a.email) || ['', ''],
-        officers: org.officers?.map((o: any) => ({ position: o.position || '', email: o.email })) || [{ position: '', email: '' }]
+        socials: {
+          facebook_url: org.facebook_url || '',
+          website_url: org.website_url || '',
+          contact_email: org.contact_email || ''
+        }
       });
     } catch (error) {
       console.error('Failed to load organization:', error);
@@ -203,32 +200,6 @@ export default function OrganizationSettings() {
     }));
   };
 
-  // Officer management
-  const addOfficer = () => {
-    setFormData(prev => ({
-      ...prev,
-      officers: [...prev.officers, { position: '', email: '' }]
-    }));
-  };
-
-  const removeOfficer = (index: number) => {
-    if (formData.officers.length > 1) {
-      setFormData(prev => ({
-        ...prev,
-        officers: prev.officers.filter((_, i) => i !== index)
-      }));
-    }
-  };
-
-  const updateOfficer = (index: number, field: 'position' | 'email', value: string) => {
-    setFormData(prev => ({
-      ...prev,
-      officers: prev.officers.map((officer, i) => 
-        i === index ? { ...officer, [field]: value } : officer
-      )
-    }));
-  };
-
   // Adviser management
   const updateAdviser = (index: number, email: string) => {
     setFormData(prev => ({
@@ -283,45 +254,10 @@ export default function OrganizationSettings() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        {/* Basic Information */}
+        {/* Department & Dean Settings */}
         <View style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>Basic Information</ThemedText>
+          <ThemedText style={styles.sectionTitle}>Department & Dean Settings</ThemedText>
           
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.inputLabel}>Organization Name</ThemedText>
-            <TextInput
-              style={styles.textInput}
-              value={formData.title}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
-              placeholder="Full organization name"
-              placeholderTextColor="#9CA3AF"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.inputLabel}>Acronym</ThemedText>
-            <TextInput
-              style={styles.textInput}
-              value={formData.acronym}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, acronym: text }))}
-              placeholder="Organization acronym"
-              placeholderTextColor="#9CA3AF"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <ThemedText style={styles.inputLabel}>Description</ThemedText>
-            <TextInput
-              style={[styles.textInput, styles.textArea]}
-              value={formData.description}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, description: text }))}
-              placeholder="Organization description"
-              placeholderTextColor="#9CA3AF"
-              multiline
-              numberOfLines={4}
-            />
-          </View>
-
           <View style={styles.inputGroup}>
             <ThemedText style={styles.inputLabel}>Department</ThemedText>
             <TouchableOpacity 
@@ -333,6 +269,19 @@ export default function OrganizationSettings() {
               </ThemedText>
               <IconSymbol name="chevron.down" size={16} color="#6B7280" />
             </TouchableOpacity>
+          </View>
+
+          <View style={styles.inputGroup}>
+            <ThemedText style={styles.inputLabel}>Dean Email (Optional)</ThemedText>
+            <TextInput
+              style={styles.textInput}
+              value={formData.dean}
+              onChangeText={(text) => setFormData(prev => ({ ...prev, dean: text }))}
+              placeholder="dean@university.edu"
+              placeholderTextColor="#9CA3AF"
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
           </View>
         </View>
 
@@ -412,58 +361,52 @@ export default function OrganizationSettings() {
           </ThemedText>
         </View>
 
-        {/* Officers */}
+        {/* Social Media & Contact */}
         <View style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>Officers</ThemedText>
-          
-          {formData.officers.map((officer, index) => (
-            <View key={index} style={styles.officerContainer}>
-              <View style={styles.officerHeader}>
-                <ThemedText style={styles.inputLabel}>Officer {index + 1}</ThemedText>
-                {formData.officers.length > 1 && (
-                  <TouchableOpacity onPress={() => removeOfficer(index)}>
-                    <IconSymbol name="trash" size={16} color="#EF4444" />
-                  </TouchableOpacity>
-                )}
-              </View>
-              
-              <TextInput
-                style={styles.textInput}
-                value={officer.position}
-                onChangeText={(text) => updateOfficer(index, 'position', text)}
-                placeholder="Position (e.g., President, Vice President)"
-                placeholderTextColor="#9CA3AF"
-              />
-              
-              <TextInput
-                style={[styles.textInput, styles.marginTop]}
-                value={officer.email}
-                onChangeText={(text) => updateOfficer(index, 'email', text)}
-                placeholder="officer@email.com"
-                placeholderTextColor="#9CA3AF"
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-            </View>
-          ))}
-          
-          <TouchableOpacity style={styles.addOfficerButton} onPress={addOfficer}>
-            <IconSymbol name="plus" size={16} color="#800020" />
-            <ThemedText style={styles.addOfficerButtonText}>Add Officer</ThemedText>
-          </TouchableOpacity>
-        </View>
-
-        {/* Dean */}
-        <View style={styles.section}>
-          <ThemedText style={styles.sectionTitle}>Dean Assignment (Optional)</ThemedText>
+          <ThemedText style={styles.sectionTitle}>Social Media & Contact</ThemedText>
           
           <View style={styles.inputGroup}>
-            <ThemedText style={styles.inputLabel}>Dean Email</ThemedText>
+            <ThemedText style={styles.inputLabel}>Facebook Page URL</ThemedText>
             <TextInput
               style={styles.textInput}
-              value={formData.dean}
-              onChangeText={(text) => setFormData(prev => ({ ...prev, dean: text }))}
-              placeholder="dean@university.edu (optional)"
+              value={formData.socials.facebook_url}
+              onChangeText={(text) => setFormData(prev => ({ 
+                ...prev, 
+                socials: { ...prev.socials, facebook_url: text }
+              }))}
+              placeholder="https://facebook.com/yourorg"
+              placeholderTextColor="#9CA3AF"
+              keyboardType="url"
+              autoCapitalize="none"
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <ThemedText style={styles.inputLabel}>Website URL</ThemedText>
+            <TextInput
+              style={styles.textInput}
+              value={formData.socials.website_url}
+              onChangeText={(text) => setFormData(prev => ({ 
+                ...prev, 
+                socials: { ...prev.socials, website_url: text }
+              }))}
+              placeholder="https://yourorg.com"
+              placeholderTextColor="#9CA3AF"
+              keyboardType="url"
+              autoCapitalize="none"
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <ThemedText style={styles.inputLabel}>Contact Email</ThemedText>
+            <TextInput
+              style={styles.textInput}
+              value={formData.socials.contact_email}
+              onChangeText={(text) => setFormData(prev => ({ 
+                ...prev, 
+                socials: { ...prev.socials, contact_email: text }
+              }))}
+              placeholder="contact@yourorg.com"
               placeholderTextColor="#9CA3AF"
               keyboardType="email-address"
               autoCapitalize="none"
@@ -471,7 +414,7 @@ export default function OrganizationSettings() {
           </View>
           
           <ThemedText style={styles.helperText}>
-            Optional assignment for higher-level approvals
+            Add social media links and contact information for your organization
           </ThemedText>
         </View>
 
@@ -771,37 +714,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   addTagButtonText: {
-    fontSize: 14,
-    color: '#800020',
-    fontWeight: '500',
-  },
-  officerContainer: {
-    marginBottom: 20,
-    padding: 16,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-  },
-  officerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  marginTop: {
-    marginTop: 12,
-  },
-  addOfficerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#800020',
-    borderStyle: 'dashed',
-    borderRadius: 8,
-    paddingVertical: 12,
-    gap: 8,
-  },
-  addOfficerButtonText: {
     fontSize: 14,
     color: '#800020',
     fontWeight: '500',

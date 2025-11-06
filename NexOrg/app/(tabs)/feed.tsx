@@ -8,6 +8,12 @@ import { ScrollView, StyleSheet, TouchableOpacity, View, Image, RefreshControl, 
 import { fetchAllPosts, fetchAllAnnouncements, fetchUserAnnouncements, fetchUserAnnouncementsRaw } from '@/lib/api';
 import { fetchUserOrganizations } from '@/lib/api';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { SideMenu } from '@/components/SideMenu';
+import { supabase } from '@/lib/supabase';
+import { PostCard } from '@/components/feed/PostCard';
+import { AnnouncementCard } from '@/components/feed/AnnouncementCard';
+import { PollCard } from '@/components/feed/PollCard';
+import { PostModal } from '@/components/feed/PostModal';
 
 // Expandable Text Component for Posts (2 lines max) - Same as homepage
 const ExpandablePostText = ({ content, colors }: { content: string, colors: any }) => {
@@ -47,9 +53,22 @@ interface FeedPost {
   likes: number;
   comments: number;
   media_url?: string;
+  media_urls?: string[];
   visibility?: string;
-  type: 'post' | 'announcement';
+  type: 'post' | 'announcement' | 'poll';
   category?: string;
+  user_has_liked?: boolean;
+  like_count?: number;
+  comment_count?: number;
+  // Poll-specific fields
+  poll_id?: string;
+  question?: string;
+  options?: any[];
+  total_votes?: number;
+  expires_at?: string;
+  allow_multiple?: boolean;
+  user_votes?: string[];
+  is_expired?: boolean;
 }
 
 interface RawPost {
@@ -103,7 +122,14 @@ const formatTimeAgo = (dateString: string): string => {
 
 // Transform raw API data to feed format
 const transformPostToFeed = (post: any): FeedPost => {
-  console.log('Transforming post:', post.post_id, 'Org data:', post.organizations);
+  // Handle media URLs - support both single and multiple images
+  let mediaUrls: string[] = [];
+  if (post.media_urls && Array.isArray(post.media_urls)) {
+    mediaUrls = post.media_urls.filter((url: string) => url && url.trim() !== '');
+  } else if (post.media_url && post.media_url.trim() !== '') {
+    mediaUrls = [post.media_url];
+  }
+  
   return {
     id: post.post_id,
     title: post.title,
@@ -114,18 +140,21 @@ const transformPostToFeed = (post: any): FeedPost => {
     organizationLogo: post.organizations?.org_pic,
     timestamp: formatTimeAgo(post.created_at),
     created_at: post.created_at, // Raw timestamp for sorting
-    likes: 0, // TODO: Implement likes system
-    comments: 0, // TODO: Implement comments system
-    media_url: post.media_url,
+    likes: post.like_count || 0,
+    comments: post.comment_count || 0,
+    media_url: mediaUrls[0], // Keep for backwards compatibility
+    media_urls: mediaUrls,
     visibility: post.visibility,
     type: 'post',
-    category: undefined // Category field doesn't exist in database
+    category: undefined, // Category field doesn't exist in database
+    user_has_liked: false, // Will be fetched separately
+    like_count: post.like_count || 0,
+    comment_count: post.comment_count || 0
   };
 };
 
 const transformAnnouncementToFeed = (announcement: any): FeedPost => {
   const announcementId = announcement.id || announcement.announcement_id;
-  console.log('Transforming announcement:', announcementId, 'Org data:', announcement.organizations);
   return {
     id: announcementId,
     title: announcement.title,
@@ -144,113 +173,120 @@ const transformAnnouncementToFeed = (announcement: any): FeedPost => {
   };
 };
 
-function PostCard({ post }: { post: FeedPost }) {
-  const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
-  const router = useRouter();
+const transformPollToFeed = (poll: any): FeedPost => {
+  const now = new Date();
+  const expiresAt = new Date(poll.expires_at);
+  const isExpired = now > expiresAt;
 
-  // Dynamic colors for PostCard
-  const backgroundColor = Colors[colorScheme ?? 'light'].background;
-  const textColor = Colors[colorScheme ?? 'light'].text;
-  const cardBackground = Colors[colorScheme ?? 'light'].card;
-  const borderColor = Colors[colorScheme ?? 'light'].border;
-  const metaColor = Colors[colorScheme ?? 'light'].tabIconDefault;
-
-  const handleOrganizationPress = () => {
-    router.push({
-      pathname: '/organization/[id]',
-      params: { 
-        id: post.organizationId, 
-        orgName: post.organization 
-      }
-    });
+  return {
+    id: poll.poll_id,
+    poll_id: poll.poll_id,
+    title: poll.question,
+    content: poll.question,
+    question: poll.question,
+    organization: poll.organizations?.org_name || `Organization ${poll.org_id}`,
+    organizationId: poll.org_id,
+    organizationColor: '#800020',
+    organizationLogo: poll.organizations?.org_pic,
+    timestamp: formatTimeAgo(poll.created_at),
+    created_at: poll.created_at,
+    likes: 0,
+    comments: 0,
+    type: 'poll',
+    options: poll.options || [],
+    total_votes: poll.total_votes || 0,
+    expires_at: poll.expires_at,
+    allow_multiple: poll.allow_multiple,
+    visibility: poll.visibility,
+    user_votes: poll.user_votes || [],
+    is_expired: isExpired
   };
+};
 
-  return (
-    <View style={[styles.redditStylePost, { backgroundColor: cardBackground, borderBottomColor: borderColor }]}>
-      {/* Post header with org avatar and info */}
-      <View style={styles.redditStylePostHeader}>
-        <TouchableOpacity 
-          style={styles.communityInfo}
-          onPress={handleOrganizationPress}
-        >
-          <View style={[styles.redditStyleOrgAvatar, { backgroundColor: post.organizationColor }]}>
-            {post.organizationLogo ? (
-              <Image 
-                source={{ uri: post.organizationLogo }} 
-                style={styles.redditStyleOrgAvatarImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <ThemedText style={styles.redditStyleOrgAvatarText}>
-                {post.organization.charAt(0)}
-              </ThemedText>
-            )}
-          </View>
-          <View style={styles.redditHeaderInfo}>
-            <View style={styles.redditInlineHeader}>
-              <ThemedText style={[styles.redditOrgNameHeader, { color: textColor }]}>
-                {post.organization}
-              </ThemedText>
-              {post.type === 'announcement' && (
-                <View style={styles.announcementTag}>
-                  <ThemedText style={styles.announcementTagText}>ANNOUNCEMENT</ThemedText>
-                </View>
-              )}
-              <ThemedText style={[styles.redditPostTimeInline, { color: metaColor }]}>
-                • {post.timestamp}
-              </ThemedText>
-            </View>
-          </View>
-        </TouchableOpacity>
-      </View>
+// Fetch all polls from all organizations
+const fetchAllPolls = async () => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return [];
+    }
 
-      {/* Post title */}
-      {post.title && (
-        <ThemedText style={[styles.redditPostTitleMain, { color: textColor }]}>
-          {post.title}
-        </ThemedText>
-      )}
+    // Get user's organization memberships
+    const { data: memberships } = await supabase
+      .from('organization_members')
+      .select('org_id')
+      .eq('user_id', user.id);
 
-      {/* Post content with 2-line limit */}
-      <ExpandablePostText 
-        content={post.content}
-        colors={colors}
-      />
+    const userOrgIds = new Set((memberships || []).map((m: any) => m.org_id));
 
-      {/* Media if present */}
-      {post.media_url && (
-        <View style={styles.redditPostImageWrapper}>
-          <Image 
-            source={{ uri: post.media_url }} 
-            style={styles.redditPostImageMain}
-            resizeMode="cover"
-          />
-        </View>
-      )}
+    // Fetch all polls
+    const { data: polls, error: pollsError } = await supabase
+      .from('polls')
+      .select(`
+        *,
+        organizations!inner(org_id, org_name, org_pic)
+      `)
+      .order('created_at', { ascending: false });
 
-      {/* Text-based action bar */}
-      <View style={styles.redditStyleActionBar}>
-        <TouchableOpacity style={styles.redditStyleActionButton}>
-          <ThemedText style={[styles.redditStyleActionText, { color: metaColor }]}>
-            {post.likes || 0} likes
-          </ThemedText>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.redditStyleActionButton}>
-          <ThemedText style={[styles.redditStyleActionText, { color: metaColor }]}>
-            {post.comments || 0} comments
-          </ThemedText>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.redditStyleActionButton}>
-          <ThemedText style={[styles.redditStyleActionText, { color: metaColor }]}>
-            Share
-          </ThemedText>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
+    if (pollsError || !polls) {
+      console.error('Error fetching polls:', pollsError);
+      return [];
+    }
 
+    // Filter polls by visibility
+    const filteredPolls = polls.filter((poll: any) => {
+      if (poll.visibility === 'public') return true;
+      if (poll.visibility === 'members_only' && userOrgIds.has(poll.org_id)) return true;
+      return false;
+    });
+
+    // Fetch poll options for all polls
+    const pollIds = filteredPolls.map((p: any) => p.poll_id);
+    if (pollIds.length === 0) return [];
+
+    const { data: options } = await supabase
+      .from('poll_options')
+      .select('*')
+      .in('poll_id', pollIds);
+
+    // Fetch user votes
+    const { data: userVotes } = await supabase
+      .from('poll_votes')
+      .select('poll_id, option_id')
+      .eq('user_id', user.id)
+      .in('poll_id', pollIds);
+
+    // Group options by poll_id
+    const optionsByPoll = (options || []).reduce((acc: any, option: any) => {
+      if (!acc[option.poll_id]) acc[option.poll_id] = [];
+      acc[option.poll_id].push(option);
+      return acc;
+    }, {});
+
+    // Group user votes by poll_id
+    const votesByPoll = (userVotes || []).reduce((acc: any, vote: any) => {
+      if (!acc[vote.poll_id]) acc[vote.poll_id] = [];
+      acc[vote.poll_id].push(vote.option_id);
+      return acc;
+    }, {});
+
+    // Format polls with options and user votes
+    return filteredPolls.map((poll: any) => {
+      const pollOptions = optionsByPoll[poll.poll_id] || [];
+      const totalVotes = pollOptions.reduce((sum: number, opt: any) => sum + (opt.vote_count || 0), 0);
+
+      return {
+        ...poll,
+        options: pollOptions,
+        total_votes: totalVotes,
+        user_votes: votesByPoll[poll.poll_id] || []
+      };
+    });
+  } catch (error) {
+    console.error('Error in fetchAllPolls:', error);
+    return [];
+  }
+};
 
 export default function FeedScreen() {
   const colorScheme = useColorScheme();
@@ -270,10 +306,19 @@ export default function FeedScreen() {
 
   const [feedData, setFeedData] = useState<FeedPost[]>([]);
   const [filteredFeed, setFilteredFeed] = useState<FeedPost[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'all' | 'announcements' | 'posts'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<'all' | 'announcements' | 'posts'>('all');
+  const [sortBy, setSortBy] = useState<'time' | 'likes'>('time');
+  const [organizations, setOrganizations] = useState<any[]>([]);
+  const [sideMenuVisible, setSideMenuVisible] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [contentDropdownVisible, setContentDropdownVisible] = useState(false);
+  const [sortDropdownVisible, setSortDropdownVisible] = useState(false);
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [selectedPost, setSelectedPost] = useState<FeedPost | null>(null);
+  const [isPostModalVisible, setIsPostModalVisible] = useState(false);
+  const [bookmarkedPosts, setBookmarkedPosts] = useState<Set<string>>(new Set());
 
   // Navigation function for organization press
   const handleOrganizationPress = (orgId: string, orgName: string) => {
@@ -283,6 +328,59 @@ export default function FeedScreen() {
         id: orgId, 
         orgName: orgName 
       }
+    });
+  };
+
+  // Side menu handlers
+  const handleMenuPress = () => {
+    setSideMenuVisible(true);
+  };
+
+  const handleSideMenuClose = () => {
+    setSideMenuVisible(false);
+  };
+
+  const handleProfilePress = () => {
+    setSideMenuVisible(false);
+    Alert.alert('Profile', 'Profile feature coming soon!');
+  };
+
+  const handleSettingsPress = () => {
+    setSideMenuVisible(false);
+    Alert.alert('Settings', 'Settings feature coming soon!');
+  };
+
+  // Post modal handlers
+  const handlePostPress = (post: FeedPost) => {
+    setSelectedPost(post);
+    setIsPostModalVisible(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsPostModalVisible(false);
+    setSelectedPost(null);
+  };
+
+  const handleLike = async (postId: string) => {
+    // Like is handled within PostModal component
+    // This callback is just for syncing state if needed
+    console.log('Post liked:', postId);
+  };
+
+  const handleShare = async (postId: string) => {
+    // TODO: Implement share functionality
+    console.log('Share post:', postId);
+  };
+
+  const handleBookmark = (postId: string) => {
+    setBookmarkedPosts(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(postId)) {
+        newSet.delete(postId);
+      } else {
+        newSet.add(postId);
+      }
+      return newSet;
     });
   };
 
@@ -301,31 +399,34 @@ export default function FeedScreen() {
   const loadFeedData = async () => {
     try {
       setLoading(true);
-      console.log('Loading feed data...');
       
       // Try to fetch user organizations, fallback to empty array if it fails
       let userOrgsData: any[] = [];
       let postsData: any[] = [];
       let announcementsData: any[] = [];
+      let pollsData: any[] = [];
       
       try {
-        [postsData, announcementsData, userOrgsData] = await Promise.all([
+        [postsData, announcementsData, pollsData, userOrgsData] = await Promise.all([
           fetchAllPosts(),
           fetchUserAnnouncementsRaw(),
+          fetchAllPolls(),
           fetchUserOrganizations()
         ]);
       } catch (fetchError) {
         console.warn('Error fetching user organizations, falling back to public posts only:', fetchError);
-        [postsData, announcementsData] = await Promise.all([
+        [postsData, announcementsData, pollsData] = await Promise.all([
           fetchAllPosts(),
-          fetchUserAnnouncementsRaw()
+          fetchUserAnnouncementsRaw(),
+          fetchAllPolls()
         ]);
         userOrgsData = [];
       }
       
-      console.log('Raw posts data:', postsData?.length || 0, 'posts');
-      console.log('Raw announcements data:', announcementsData?.length || 0, 'announcements');
-      console.log('User organizations:', userOrgsData?.length || 0, 'orgs');
+      // Set organizations for side menu
+      if (userOrgsData && Array.isArray(userOrgsData)) {
+        setOrganizations(userOrgsData);
+      }
       
       // Get user's organization IDs for filtering
       const userOrgIds = new Set((userOrgsData || []).map((org: any) => org.organizations?.org_id || org.org_id || org.id));
@@ -344,15 +445,11 @@ export default function FeedScreen() {
         return false;
       });
       
-      console.log('Filtered posts:', filteredPosts?.length || 0, 'posts after visibility filtering');
-      
       const transformedPosts = filteredPosts.map(transformPostToFeed);
       const transformedAnnouncements = (announcementsData || []).map(transformAnnouncementToFeed);
+      const transformedPolls = (pollsData || []).map(transformPollToFeed);
       
-      console.log('Transformed posts:', transformedPosts?.length || 0);
-      console.log('Transformed announcements:', transformedAnnouncements?.length || 0);
-      
-      const allFeedItems = [...transformedPosts, ...transformedAnnouncements]
+      const allFeedItems = [...transformedPosts, ...transformedAnnouncements, ...transformedPolls]
         .sort((a, b) => {
           // Sort by raw created_at timestamps (newest first)
           const timeA = new Date(a.created_at).getTime();
@@ -360,15 +457,8 @@ export default function FeedScreen() {
           return timeB - timeA;
         });
       
-      console.log('Final feed items:', allFeedItems?.length || 0);
-      console.log('Sample feed item:', allFeedItems?.[0]);
-      
       setFeedData(allFeedItems);
       setFilteredFeed(allFeedItems);
-      
-      if (allFeedItems.length === 0) {
-        console.log('No feed items found. Check if there are posts/announcements in the database.');
-      }
     } catch (error) {
       console.error('Error loading feed data:', error);
       Alert.alert('Error', 'Failed to load feed data. Check console for details.');
@@ -384,27 +474,37 @@ export default function FeedScreen() {
     setRefreshing(false);
   };
 
-  // Filter feed data
+  // Filter and sort feed based on active tab, search query, and sort preference
   useEffect(() => {
     let filtered = [...feedData];
     
     // Filter by tab
-    if (activeTab !== 'all') {
-      filtered = filtered.filter(item => item.type === activeTab.slice(0, -1)); // Remove 's' from 'posts'/'announcements'
+    if (activeTab === 'announcements') {
+      filtered = filtered.filter(item => item.type === 'announcement');
+    } else if (activeTab === 'posts') {
+      filtered = filtered.filter(item => item.type === 'post' || item.type === 'poll');
     }
     
     // Filter by search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(item => 
-        item.content.toLowerCase().includes(query) ||
-        item.organization.toLowerCase().includes(query) ||
-        (item.title && item.title.toLowerCase().includes(query))
+        item.title?.toLowerCase().includes(query) ||
+        item.content?.toLowerCase().includes(query) ||
+        item.question?.toLowerCase().includes(query) ||
+        item.organization?.toLowerCase().includes(query)
       );
     }
     
+    // Sort by preference
+    if (sortBy === 'time') {
+      filtered = filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    } else if (sortBy === 'likes') {
+      filtered = filtered.sort((a, b) => (b.likes || 0) - (a.likes || 0));
+    }
+    
     setFilteredFeed(filtered);
-  }, [feedData, activeTab, searchQuery]);
+  }, [feedData, activeTab, searchQuery, sortBy]);
 
   // Load data on mount
   useEffect(() => {
@@ -412,6 +512,7 @@ export default function FeedScreen() {
   }, []);
 
   return (
+    <>
     <ScrollView 
       style={[styles.container, { backgroundColor: colors.background }]}
       refreshControl={
@@ -422,80 +523,211 @@ export default function FeedScreen() {
       <View style={[styles.header, { backgroundColor: headerBackground, borderBottomColor: borderColor }]}>
         <View style={styles.headerContent}>
           <View style={styles.logoContainer}>
+            <TouchableOpacity style={styles.menuButton} onPress={handleMenuPress}>
+              <IconSymbol name="line.3.horizontal" size={22} color={placeholderColor} />
+            </TouchableOpacity>
             <ThemedText style={[styles.logo, { color: textColor }]}>NexOrg</ThemedText>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.headerButton}>
-              <IconSymbol name="magnifyingglass" size={22} color={placeholderColor} />
+            <TouchableOpacity 
+              style={styles.headerButton}
+              onPress={() => {
+                setSearchVisible(!searchVisible);
+                setContentDropdownVisible(false);
+                setSortDropdownVisible(false);
+              }}
+            >
+              <IconSymbol name="magnifyingglass" size={22} color={searchVisible ? '#800020' : placeholderColor} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.headerButton}>
+            
+            <TouchableOpacity 
+              style={styles.headerButton}
+              onPress={() => router.push('/(tabs)/notifications')}
+            >
               <IconSymbol name="bell" size={22} color={placeholderColor} />
             </TouchableOpacity>
           </View>
         </View>
       </View>
 
-      {/* Reddit-style Search Bar */}
-      <View style={[styles.searchContainer, { backgroundColor: headerBackground }]}>
-        <View style={[styles.searchInputContainer, { backgroundColor: searchBackground, borderColor }]}>
-          <IconSymbol name="magnifyingglass" size={18} color={placeholderColor} />
-          <TextInput
-            style={[styles.searchInput, { color: textColor }]}
-            placeholder="Search NexOrg"
-            placeholderTextColor={placeholderColor}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <IconSymbol name="xmark.circle.fill" size={18} color={placeholderColor} />
-            </TouchableOpacity>
-          )}
+      {/* Collapsible Search Bar */}
+      {searchVisible && (
+        <View style={[styles.searchContainer, { backgroundColor: headerBackground }]}>
+          <View style={[styles.searchInputContainer, { backgroundColor: searchBackground, borderColor }]}>
+            <IconSymbol name="magnifyingglass" size={18} color={placeholderColor} />
+            <TextInput
+              style={[styles.searchInput, { color: textColor }]}
+              placeholder="Search NexOrg"
+              placeholderTextColor={placeholderColor}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              returnKeyType="search"
+              autoFocus
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <IconSymbol name="xmark.circle.fill" size={18} color={placeholderColor} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Filter Buttons Section - Compact on Right */}
+      <View style={[styles.filterContainer, { backgroundColor: headerBackground }]}>
+        <View style={styles.filterButtonsRow}>
+          {/* Content Filter Button */}
+          <TouchableOpacity 
+            style={[styles.compactFilterButton, { backgroundColor: 'transparent', borderColor }, contentDropdownVisible && { backgroundColor: 'rgba(128, 0, 32, 0.1)', borderColor: '#800020' }]}
+            onPress={() => {
+              setContentDropdownVisible(!contentDropdownVisible);
+              setSortDropdownVisible(false);
+              setSearchVisible(false);
+            }}
+          >
+            <IconSymbol 
+              name={activeTab === 'all' ? 'doc.text' : 
+                   activeTab === 'announcements' ? 'megaphone' : 'bubble.left.and.bubble.right'} 
+              size={14} 
+              color={contentDropdownVisible ? '#800020' : placeholderColor} 
+            />
+            <ThemedText style={[
+              styles.compactFilterText, 
+              { color: contentDropdownVisible ? '#800020' : placeholderColor }
+            ]}>
+              {activeTab === 'all' ? 'All' : 
+               activeTab === 'announcements' ? 'Announce' : 'Posts'}
+            </ThemedText>
+            <IconSymbol 
+              name={contentDropdownVisible ? "chevron.up" : "chevron.down"} 
+              size={12} 
+              color={contentDropdownVisible ? '#800020' : placeholderColor} 
+            />
+          </TouchableOpacity>
+
+          {/* Sort Filter Button */}
+          <TouchableOpacity 
+            style={[styles.compactFilterButton, { backgroundColor: 'transparent', borderColor }, sortDropdownVisible && { backgroundColor: 'rgba(128, 0, 32, 0.1)', borderColor: '#800020' }]}
+            onPress={() => {
+              setSortDropdownVisible(!sortDropdownVisible);
+              setContentDropdownVisible(false);
+              setSearchVisible(false);
+            }}
+          >
+            <IconSymbol 
+              name={sortBy === 'time' ? 'clock' : 'heart'} 
+              size={14} 
+              color={sortDropdownVisible ? '#800020' : placeholderColor} 
+            />
+            <ThemedText style={[
+              styles.compactFilterText, 
+              { color: sortDropdownVisible ? '#800020' : placeholderColor }
+            ]}>
+              {sortBy === 'time' ? 'Latest' : 'Liked'}
+            </ThemedText>
+            <IconSymbol 
+              name={sortDropdownVisible ? "chevron.up" : "chevron.down"} 
+              size={12} 
+              color={sortDropdownVisible ? '#800020' : placeholderColor} 
+            />
+          </TouchableOpacity>
         </View>
       </View>
 
-      {/* Reddit-style Tab Container */}
-      <View style={[styles.tabContainer, { backgroundColor: headerBackground, borderBottomColor: borderColor }]}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScrollContent}>
+      {/* Content Filter Dropdown */}
+      {contentDropdownVisible && (
+        <View style={[styles.compactDropdown, { backgroundColor: headerBackground, borderColor, right: 90 }]}>
           <TouchableOpacity 
-            style={[styles.tab, activeTab === 'all' && styles.activeTab]}
-            onPress={() => setActiveTab('all')}
+            style={[styles.compactDropdownItem, activeTab === 'all' && styles.activeDropdownItem]}
+            onPress={() => {
+              setActiveTab('all');
+              setContentDropdownVisible(false);
+            }}
           >
+            <IconSymbol name="doc.text" size={14} color={activeTab === 'all' ? '#800020' : placeholderColor} />
             <ThemedText style={[
-              { color: placeholderColor, fontSize: 14, fontWeight: '500' }, 
-              activeTab === 'all' && { color: '#800020', fontWeight: '700' }
+              styles.compactDropdownText, 
+              { color: activeTab === 'all' ? '#800020' : textColor }
             ]}>
               All
             </ThemedText>
+            {activeTab === 'all' && <IconSymbol name="checkmark" size={12} color="#800020" />}
           </TouchableOpacity>
-          
+
           <TouchableOpacity 
-            style={[styles.tab, activeTab === 'announcements' && styles.activeTab]}
-            onPress={() => setActiveTab('announcements')}
+            style={[styles.compactDropdownItem, activeTab === 'announcements' && styles.activeDropdownItem]}
+            onPress={() => {
+              setActiveTab('announcements');
+              setContentDropdownVisible(false);
+            }}
           >
+            <IconSymbol name="megaphone" size={14} color={activeTab === 'announcements' ? '#800020' : placeholderColor} />
             <ThemedText style={[
-              { color: placeholderColor, fontSize: 14, fontWeight: '500' }, 
-              activeTab === 'announcements' && { color: '#800020', fontWeight: '700' }
+              styles.compactDropdownText, 
+              { color: activeTab === 'announcements' ? '#800020' : textColor }
             ]}>
-              Announcements
+              Announce
             </ThemedText>
+            {activeTab === 'announcements' && <IconSymbol name="checkmark" size={12} color="#800020" />}
           </TouchableOpacity>
-          
+
           <TouchableOpacity 
-            style={[styles.tab, activeTab === 'posts' && styles.activeTab]}
-            onPress={() => setActiveTab('posts')}
+            style={[styles.compactDropdownItem, activeTab === 'posts' && styles.activeDropdownItem]}
+            onPress={() => {
+              setActiveTab('posts');
+              setContentDropdownVisible(false);
+            }}
           >
+            <IconSymbol name="bubble.left.and.bubble.right" size={14} color={activeTab === 'posts' ? '#800020' : placeholderColor} />
             <ThemedText style={[
-              { color: placeholderColor, fontSize: 14, fontWeight: '500' }, 
-              activeTab === 'posts' && { color: '#800020', fontWeight: '700' }
+              styles.compactDropdownText, 
+              { color: activeTab === 'posts' ? '#800020' : textColor }
             ]}>
               Posts
             </ThemedText>
+            {activeTab === 'posts' && <IconSymbol name="checkmark" size={12} color="#800020" />}
           </TouchableOpacity>
-        </ScrollView>
-      </View>
+        </View>
+      )}
 
+      {/* Sort Filter Dropdown */}
+      {sortDropdownVisible && (
+        <View style={[styles.compactDropdown, { backgroundColor: headerBackground, borderColor, right: 16 }]}>
+          <TouchableOpacity 
+            style={[styles.compactDropdownItem, sortBy === 'time' && styles.activeDropdownItem]}
+            onPress={() => {
+              setSortBy('time');
+              setSortDropdownVisible(false);
+            }}
+          >
+            <IconSymbol name="clock" size={14} color={sortBy === 'time' ? '#800020' : placeholderColor} />
+            <ThemedText style={[
+              styles.compactDropdownText, 
+              { color: sortBy === 'time' ? '#800020' : textColor }
+            ]}>
+              Latest
+            </ThemedText>
+            {sortBy === 'time' && <IconSymbol name="checkmark" size={12} color="#800020" />}
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.compactDropdownItem, sortBy === 'likes' && styles.activeDropdownItem]}
+            onPress={() => {
+              setSortBy('likes');
+              setSortDropdownVisible(false);
+            }}
+          >
+            <IconSymbol name="heart" size={14} color={sortBy === 'likes' ? '#800020' : placeholderColor} />
+            <ThemedText style={[
+              styles.compactDropdownText, 
+              { color: sortBy === 'likes' ? '#800020' : textColor }
+            ]}>
+              Liked
+            </ThemedText>
+            {sortBy === 'likes' && <IconSymbol name="checkmark" size={12} color="#800020" />}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Reddit-style Content */}
       <View style={styles.contentContainer}>
@@ -510,13 +742,149 @@ export default function FeedScreen() {
             </ThemedText>
           </View>
         ) : (
-          filteredFeed.map((item) => (
-            <PostCard key={`${item.type}-${item.id}`} post={item} />
-          ))
+          filteredFeed.map((item) => {
+            if (item.type === 'poll') {
+              return (
+                <PollCard
+                  key={`poll-${item.poll_id}`}
+                  poll={{
+                    poll_id: item.poll_id!,
+                    question: item.question!,
+                    options: item.options!,
+                    total_votes: item.total_votes!,
+                    expires_at: item.expires_at!,
+                    allow_multiple: item.allow_multiple!,
+                    visibility: item.visibility,
+                    created_at: item.created_at,
+                    user_votes: item.user_votes,
+                    is_expired: item.is_expired,
+                    organizations: {
+                      org_name: item.organization,
+                      org_pic: item.organizationLogo || null
+                    }
+                  }}
+                  onVote={async (pollId, optionIds) => {
+                    try {
+                      const { data: { user } } = await supabase.auth.getUser();
+                      if (!user) {
+                        Alert.alert('Error', 'You must be logged in to vote');
+                        return;
+                      }
+
+                      // Check if user has already voted - if so, we'll update their vote
+                      const { data: existingVotes } = await supabase
+                        .from('poll_votes')
+                        .select('vote_id, option_id')
+                        .eq('poll_id', pollId)
+                        .eq('user_id', user.id);
+
+                      const hasExistingVotes = existingVotes && existingVotes.length > 0;
+
+                      // If user has existing votes, delete them and decrement counts
+                      if (hasExistingVotes) {
+                        const oldOptionIds = existingVotes.map((v: any) => v.option_id);
+                        
+                        await supabase
+                          .from('poll_votes')
+                          .delete()
+                          .eq('poll_id', pollId)
+                          .eq('user_id', user.id);
+
+                        for (const optionId of oldOptionIds) {
+                          const { data: option } = await supabase
+                            .from('poll_options')
+                            .select('vote_count')
+                            .eq('option_id', optionId)
+                            .single();
+
+                          if (option && option.vote_count > 0) {
+                            await supabase
+                              .from('poll_options')
+                              .update({ vote_count: option.vote_count - 1 })
+                              .eq('option_id', optionId);
+                          }
+                        }
+                      }
+
+                      // Insert new votes
+                      const votesToInsert = optionIds.map(optionId => ({
+                        poll_id: pollId,
+                        user_id: user.id,
+                        option_id: optionId
+                      }));
+
+                      const { error: voteError } = await supabase
+                        .from('poll_votes')
+                        .insert(votesToInsert);
+
+                      if (voteError) throw new Error('Failed to record vote');
+
+                      // Update vote counts for each new option
+                      for (const optionId of optionIds) {
+                        const { data: option } = await supabase
+                          .from('poll_options')
+                          .select('vote_count')
+                          .eq('option_id', optionId)
+                          .single();
+
+                        if (option) {
+                          await supabase
+                            .from('poll_options')
+                            .update({ vote_count: (option.vote_count || 0) + 1 })
+                            .eq('option_id', optionId);
+                        }
+                      }
+
+                      Alert.alert('Success', hasExistingVotes ? 'Your vote has been updated!' : 'Your vote has been recorded!');
+                      await loadFeedData();
+                    } catch (error) {
+                      console.error('Failed to vote on poll:', error);
+                      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to submit vote. Please try again.');
+                    }
+                  }}
+                />
+              );
+            }
+            
+            return (
+              <PostCard 
+                key={`${item.type}-${item.id}`} 
+                post={item}
+                onPress={() => handlePostPress(item)}
+                onLikeUpdate={(postId, liked, newCount) => {
+                  setFeedData(prev => prev.map(p => 
+                    p.id === postId ? { ...p, user_has_liked: liked, like_count: newCount, likes: newCount } : p
+                  ));
+                }}
+              />
+            );
+          })
         )}
       </View>
 
     </ScrollView>
+
+    {/* Side Menu */}
+    <SideMenu
+      visible={sideMenuVisible}
+      onClose={handleSideMenuClose}
+      organizations={organizations}
+      onOrganizationPress={handleOrganizationPress}
+      onProfilePress={handleProfilePress}
+      onSettingsPress={handleSettingsPress}
+    />
+
+    {/* Post Modal */}
+    <PostModal
+      visible={isPostModalVisible}
+      post={selectedPost}
+      onClose={handleCloseModal}
+      onLike={handleLike}
+      onShare={handleShare}
+      onBookmark={handleBookmark}
+      isBookmarked={selectedPost ? bookmarkedPosts.has(selectedPost.id) : false}
+    />
+  </>
   );
 }
 
@@ -938,59 +1306,13 @@ const styles = StyleSheet.create({
   logoContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
-  // Reddit-style Post Layout (same as homepage)
-  redditStylePost: {
-    paddingVertical: 5,
-    paddingHorizontal: 5,
-    borderBottomWidth: 1,
+  menuButton: {
+    padding: 8,
+    borderRadius: 8,
   },
-  redditStylePostHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  redditStyleOrgAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#800020',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  redditStyleOrgAvatarImage: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-  },
-  redditStyleOrgAvatarText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  redditHeaderInfo: {
-    flex: 1,
-  },
-  redditInlineHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  redditOrgNameHeader: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  redditPostTimeInline: {
-    fontSize: 10,
-    marginLeft: 4,
-  },
-  redditPostTitleMain: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 6,
-    lineHeight: 18,
-  },
+  // Styles for ExpandablePostText component
   redditPostTextCompact: {
     fontSize: 12,
     lineHeight: 16,
@@ -1000,46 +1322,138 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  redditPostImageWrapper: {
-    marginVertical: 8,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  redditPostImageMain: {
-    width: '100%',
-    height: 200,
-  },
-  redditStyleActionBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    marginTop: 8,
+  // Dropdown Filter Styles
+  filterContainer: {
     paddingHorizontal: 16,
+    paddingVertical: 6,
+    position: 'relative',
   },
-  redditStyleActionButton: {
-    flex: 1,
+  filterButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  compactFilterButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 16,
+    borderWidth: 1,
     gap: 4,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
   },
-  redditStyleActionText: {
-    fontSize: 12,
+  compactFilterText: {
+    fontSize: 11,
     fontWeight: '500',
   },
-  announcementTag: {
-    marginLeft: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: '#800020',
+  dropdownMenuContainer: {
+    position: 'absolute',
+    top: 60,
+    left: 16,
+    right: 16,
+    zIndex: 1000,
   },
-  announcementTagText: {
-    fontSize: 8,
-    fontWeight: 'bold',
-    color: 'white',
-    letterSpacing: 0.5,
+  dropdownContainer: {
+    borderRadius: 12,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+    paddingVertical: 8,
+  },
+  headerDropdown: {
+    position: 'absolute',
+    top: 60,
+    minWidth: 150,
+    borderRadius: 12,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+    paddingVertical: 8,
+    zIndex: 1000,
+  },
+  filterDropdown: {
+    position: 'absolute',
+    top: 60,
+    borderRadius: 8,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+    paddingVertical: 4,
+    zIndex: 1000,
+  },
+  dropdownSection: {
+    paddingVertical: 8,
+  },
+  dropdownSectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 36,
+  },
+  activeDropdownItem: {
+    backgroundColor: 'rgba(128, 0, 32, 0.1)',
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginLeft: 8,
+    flex: 1,
+  },
+  compactDropdown: {
+    position: 'absolute',
+    top: 40,
+    minWidth: 80,
+    borderRadius: 6,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+    paddingVertical: 2,
+    zIndex: 1000,
+  },
+  compactDropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    minHeight: 28,
+  },
+  compactDropdownText: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginLeft: 6,
+    flex: 1,
   },
 });

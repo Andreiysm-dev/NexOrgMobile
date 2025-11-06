@@ -1243,15 +1243,10 @@ export const fetchAllPosts = async (): Promise<any[]> => {
   try {
     console.log('Fetching all posts for feed...');
     
-    // First, let's try a simpler query to see if posts exist at all
-    const { data: allPosts, error: allPostsError } = await supabase
-      .from('organization_posts')
-      .select('*')
-      .limit(10);
+    // Get current user
+    const { data: { user } } = await supabase.auth.getUser();
     
-    console.log('All posts check:', allPosts?.length || 0, 'Error:', allPostsError);
-    
-    // Now try the full query using the correct structure from web version
+    // Fetch posts with organizations
     const { data: posts, error } = await supabase
       .from('organization_posts')
       .select(`
@@ -1260,7 +1255,8 @@ export const fetchAllPosts = async (): Promise<any[]> => {
         title, 
         content, 
         created_at, 
-        media_url, 
+        media_url,
+        media_urls,
         visibility, 
         author_id,
         organizations!organization_posts_org_id_fkey (
@@ -1269,47 +1265,68 @@ export const fetchAllPosts = async (): Promise<any[]> => {
         )
       `)
       .order('created_at', { ascending: false })
-      .limit(50); // Remove visibility filter temporarily to see all posts
+      .limit(50);
 
     if (error) {
-      console.error('Error fetching posts with organizations:', error);
-      
-      // Fallback: try without the join and fetch organization data separately
-      const { data: simplePosts, error: simpleError } = await supabase
-        .from('organization_posts')
-        .select('post_id, org_id, title, content, created_at, media_url, visibility')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      
-      console.log('Simple posts fallback:', simplePosts?.length || 0, 'Error:', simpleError);
-      
-      if (simplePosts && simplePosts.length > 0) {
-        // Get unique org_ids
-        const orgIds = [...new Set(simplePosts.map(post => post.org_id))];
-        
-        // Fetch organization details separately
-        const { data: orgs, error: orgsError } = await supabase
-          .from('organizations')
-          .select('org_id, org_name, org_pic')
-          .in('org_id', orgIds);
-        
-        console.log('Fetched organizations separately:', orgs?.length || 0, 'Error:', orgsError);
-        
-        // Merge posts with organization data
-        const postsWithOrgs = simplePosts.map(post => ({
-          ...post,
-          organizations: orgs?.find(org => org.org_id === post.org_id) || null
-        }));
-        
-        return postsWithOrgs;
-      }
-      
-      return simplePosts || [];
+      console.error('Error fetching posts:', error);
+      return [];
     }
 
-    console.log('Found feed posts with organizations:', posts?.length || 0);
-    console.log('Sample post data:', posts?.[0]);
-    return posts || [];
+    if (!posts || posts.length === 0) {
+      return [];
+    }
+
+    // Get post IDs
+    const postIds = posts.map(p => p.post_id);
+
+    // Fetch like counts for all posts
+    const { data: likeCounts } = await supabase
+      .from('post_likes')
+      .select('post_id')
+      .in('post_id', postIds);
+
+    // Count likes per post
+    const likeCountMap = (likeCounts || []).reduce((acc: any, like: any) => {
+      acc[like.post_id] = (acc[like.post_id] || 0) + 1;
+      return acc;
+    }, {});
+
+    // Fetch user's likes if logged in
+    let userLikesMap: any = {};
+    if (user) {
+      const { data: userLikes } = await supabase
+        .from('post_likes')
+        .select('post_id')
+        .eq('user_id', user.id)
+        .in('post_id', postIds);
+
+      userLikesMap = (userLikes || []).reduce((acc: any, like: any) => {
+        acc[like.post_id] = true;
+        return acc;
+      }, {});
+    }
+
+    // Fetch comment counts
+    const { data: commentCounts } = await supabase
+      .from('post_comments')
+      .select('post_id')
+      .in('post_id', postIds);
+
+    const commentCountMap = (commentCounts || []).reduce((acc: any, comment: any) => {
+      acc[comment.post_id] = (acc[comment.post_id] || 0) + 1;
+      return acc;
+    }, {});
+
+    // Merge all data
+    const postsWithCounts = posts.map(post => ({
+      ...post,
+      like_count: likeCountMap[post.post_id] || 0,
+      user_has_liked: userLikesMap[post.post_id] || false,
+      comment_count: commentCountMap[post.post_id] || 0
+    }));
+
+    console.log('Found feed posts:', postsWithCounts.length);
+    return postsWithCounts;
   } catch (error) {
     console.error('Error fetching feed posts:', error);
     return [];
@@ -1516,6 +1533,660 @@ export const deletePost = async (orgId: string, postId: string): Promise<void> =
     console.log('Deleted post:', postId);
   } catch (error) {
     console.error('Error deleting post:', error);
+    throw error;
+  }
+};
+
+/**
+ * Comment interfaces
+ */
+export interface PostComment {
+  comment_id: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  user_id: string;
+  reply_to_comment_id?: string | null;
+  replies?: PostComment[];
+  profile: {
+    full_name: string;
+    profile_image?: string;
+  };
+}
+
+/**
+ * Fetch comments for a post
+ */
+export const fetchPostComments = async (postId: string): Promise<PostComment[]> => {
+  try {
+    console.log('Fetching comments for post:', postId);
+    
+    if (!postId) {
+      console.error('Post ID is undefined');
+      return [];
+    }
+    
+    // First, get comments
+    const { data: comments, error } = await supabase
+      .from('post_comments')
+      .select(`
+        comment_id,
+        content,
+        created_at,
+        updated_at,
+        user_id,
+        reply_to_comment_id
+      `)
+      .eq('post_id', postId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching comments:', error);
+      throw new Error(`Failed to fetch comments: ${error.message}`);
+    }
+
+    if (!comments || comments.length === 0) {
+      return [];
+    }
+
+    // Fetch user profiles separately
+    const userIds = comments.map((comment: any) => comment.user_id);
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('user_id, full_name, profile_image')
+      .in('user_id', userIds);
+
+    // Build nested comment structure with profiles
+    const commentMap = new Map<string, PostComment>();
+    const rootComments: PostComment[] = [];
+
+    // First pass: create all comment objects with profiles
+    comments.forEach((comment: any) => {
+      const profile = profiles?.find((p: any) => p.user_id === comment.user_id);
+      const commentObj: PostComment = {
+        comment_id: comment.comment_id,
+        content: comment.content,
+        created_at: comment.created_at,
+        updated_at: comment.updated_at,
+        user_id: comment.user_id,
+        reply_to_comment_id: comment.reply_to_comment_id,
+        replies: [],
+        profile: profile || { full_name: 'Unknown User' }
+      };
+      commentMap.set(comment.comment_id, commentObj);
+    });
+
+    // Second pass: build tree structure
+    commentMap.forEach((comment) => {
+      if (comment.reply_to_comment_id) {
+        const parent = commentMap.get(comment.reply_to_comment_id);
+        if (parent) {
+          parent.replies = parent.replies || [];
+          parent.replies.push(comment);
+        } else {
+          // Parent not found, treat as root
+          rootComments.push(comment);
+        }
+      } else {
+        rootComments.push(comment);
+      }
+    });
+
+    console.log('Fetched comments:', rootComments.length);
+    return rootComments;
+  } catch (error) {
+    console.error('Error fetching comments:', error);
+    throw error;
+  }
+};
+
+/**
+ * Add a comment to a post
+ */
+export const addPostComment = async (
+  postId: string,
+  content: string,
+  replyToCommentId?: string
+): Promise<PostComment> => {
+  try {
+    console.log('Adding comment to post:', postId);
+    
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const { data: comment, error } = await supabase
+      .from('post_comments')
+      .insert({
+        post_id: postId,
+        user_id: user.id,
+        content: content.trim(),
+        reply_to_comment_id: replyToCommentId || null
+      })
+      .select(`
+        comment_id,
+        content,
+        created_at,
+        updated_at,
+        user_id,
+        reply_to_comment_id
+      `)
+      .single();
+
+    if (error) {
+      console.error('Error adding comment:', error);
+      throw new Error(`Failed to add comment: ${error.message}`);
+    }
+
+    // Fetch user profile separately
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('user_id, full_name, profile_image')
+      .eq('user_id', user.id)
+      .single();
+
+    console.log('Added comment:', comment.comment_id);
+    return {
+      ...comment,
+      profile: profile || { full_name: 'Unknown User' },
+      replies: []
+    };
+  } catch (error) {
+    console.error('Error adding comment:', error);
+    throw error;
+  }
+};
+
+/**
+ * Delete a comment
+ */
+export const deletePostComment = async (commentId: string): Promise<void> => {
+  try {
+    console.log('Deleting comment:', commentId);
+    
+    const { error } = await supabase
+      .from('post_comments')
+      .delete()
+      .eq('comment_id', commentId);
+
+    if (error) {
+      console.error('Error deleting comment:', error);
+      throw new Error(`Failed to delete comment: ${error.message}`);
+    }
+
+    console.log('Deleted comment:', commentId);
+  } catch (error) {
+    console.error('Error deleting comment:', error);
+    throw error;
+  }
+};
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+export interface Notification {
+  notification_id: string;
+  recipient_id: string;
+  recipient_role: string;
+  title: string;
+  message: string;
+  notification_type: string;
+  priority: string;
+  is_read: boolean;
+  created_at: string;
+  data?: {
+    action_url?: string;
+    deep_link?: string;
+    liker_name?: string;
+    commenter_name?: string;
+    author_name?: string;
+    post_title?: string;
+    organization_name?: string;
+    comment_content?: string;
+  };
+  organization_id?: string;
+  post_id?: string;
+  redbook_id?: string;
+  event_id?: string;
+}
+
+export interface NotificationFilters {
+  limit?: number;
+  offset?: number;
+  unreadOnly?: boolean;
+  type?: string;
+}
+
+/**
+ * Fetch notifications for the current user
+ */
+export const fetchNotifications = async (filters: NotificationFilters = {}): Promise<Notification[]> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const {
+      limit = 50,
+      offset = 0,
+      unreadOnly = false,
+      type
+    } = filters;
+
+    let query = supabase
+      .from('notifications')
+      .select('*')
+      .eq('recipient_id', user.id)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (unreadOnly) {
+      query = query.eq('is_read', false);
+    }
+
+    if (type) {
+      query = query.eq('notification_type', type);
+    }
+
+    const { data: notifications, error } = await query;
+
+    if (error) {
+      console.error('Error fetching notifications:', error);
+      throw new Error(`Failed to fetch notifications: ${error.message}`);
+    }
+
+    return notifications || [];
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get unread notification count
+ */
+export const getUnreadNotificationCount = async (): Promise<number> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return 0;
+
+    const { count, error } = await supabase
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('recipient_id', user.id)
+      .eq('is_read', false);
+
+    if (error) {
+      console.error('Error fetching unread count:', error);
+      return 0;
+    }
+
+    return count || 0;
+  } catch (error) {
+    console.error('Error fetching unread count:', error);
+    return 0;
+  }
+};
+
+/**
+ * Mark a notification as read
+ */
+export const markNotificationAsRead = async (notificationId: string): Promise<void> => {
+  try {
+    const { error } = await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('notification_id', notificationId);
+
+    if (error) {
+      console.error('Error marking notification as read:', error);
+      throw new Error(`Failed to mark notification as read: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    throw error;
+  }
+};
+
+/**
+ * Mark all notifications as read
+ */
+export const markAllNotificationsAsRead = async (): Promise<void> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const { error } = await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('recipient_id', user.id)
+      .eq('is_read', false);
+
+    if (error) {
+      console.error('Error marking all notifications as read:', error);
+      throw new Error(`Failed to mark all notifications as read: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    throw error;
+  }
+};
+
+/**
+ * Delete a notification
+ */
+export const deleteNotification = async (notificationId: string): Promise<void> => {
+  try {
+    const { error } = await supabase
+      .from('notifications')
+      .delete()
+      .eq('notification_id', notificationId);
+
+    if (error) {
+      console.error('Error deleting notification:', error);
+      throw new Error(`Failed to delete notification: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    throw error;
+  }
+};
+
+// ============================================================================
+// MESSAGING
+// ============================================================================
+
+export interface Message {
+  id: string;
+  text: string;
+  subject: string;
+  created_at: string;
+  updated_at: string;
+  sender_id: string;
+  recipient_id: string;
+  is_read: boolean;
+  attachments?: any[];
+  priority?: string;
+  message_type?: string;
+  is_starred?: boolean;
+  is_archived?: boolean;
+  is_deleted?: boolean;
+  is_draft?: boolean;
+  reply_to_message_id?: string;
+  sender_profile?: {
+    user_id: string;
+    full_name: string;
+    profile_image?: string;
+    institutional_email?: string;
+  };
+}
+
+export interface Conversation {
+  partner: {
+    id: string;
+    name: string;
+    email: string;
+    avatar?: string;
+  };
+  lastMessage: {
+    content: string;
+    created_at: string;
+  };
+  unreadCount: number;
+  totalMessages: number;
+  isStarred: boolean;
+  isArchived: boolean;
+}
+
+/**
+ * Fetch all conversations for the current user
+ */
+export const fetchConversations = async (): Promise<Conversation[]> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    // Get all messages where user is sender or recipient
+    const { data: messages, error } = await supabase
+      .from('messages')
+      .select(`
+        id,
+        text,
+        subject,
+        created_at,
+        sender_id,
+        recipient_id,
+        is_read,
+        is_starred,
+        is_archived,
+        is_deleted
+      `)
+      .or(`sender_id.eq.${user.id},recipient_id.eq.${user.id}`)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching conversations:', error);
+      throw new Error(`Failed to fetch conversations: ${error.message}`);
+    }
+
+    // Get unique partner IDs
+    const partnerIds = new Set<string>();
+    messages?.forEach((message: any) => {
+      const partner = message.sender_id === user.id ? message.recipient_id : message.sender_id;
+      if (partner && partner !== user.id) {
+        partnerIds.add(partner);
+      }
+    });
+
+    // Fetch profiles for all partners
+    const { data: partnerProfiles, error: profilesError } = await supabase
+      .from('profiles')
+      .select('user_id, full_name, profile_image, institutional_email')
+      .in('user_id', Array.from(partnerIds));
+
+    if (profilesError) {
+      console.error('Error fetching partner profiles:', profilesError);
+    }
+
+    // Create a map of partner profiles
+    const profileMap = new Map();
+    partnerProfiles?.forEach((profile: any) => {
+      profileMap.set(profile.user_id, profile);
+    });
+
+    // Group messages into conversations
+    const conversationMap = new Map();
+    messages?.forEach((message: any) => {
+      const partner = message.sender_id === user.id ? message.recipient_id : message.sender_id;
+      
+      if (partner && partner !== user.id) {
+        if (!conversationMap.has(partner)) {
+          const partnerProfile = profileMap.get(partner);
+          
+          conversationMap.set(partner, {
+            partner: {
+              id: partner,
+              name: partnerProfile?.full_name || 'Unknown User',
+              email: partnerProfile?.institutional_email || 'No email',
+              avatar: partnerProfile?.profile_image
+            },
+            lastMessage: {
+              content: message.text || 'No message',
+              created_at: message.created_at
+            },
+            unreadCount: 0,
+            totalMessages: 1,
+            isStarred: message.is_starred || false,
+            isArchived: message.is_archived || false
+          });
+        }
+
+        // Update unread count for messages sent TO the current user
+        if (message.recipient_id === user.id && !message.is_read) {
+          const conversation = conversationMap.get(partner);
+          if (conversation) {
+            conversation.unreadCount += 1;
+          }
+        }
+        
+        // Update total message count
+        const conversation = conversationMap.get(partner);
+        if (conversation) {
+          conversation.totalMessages += 1;
+        }
+      }
+    });
+
+    return Array.from(conversationMap.values());
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+    throw error;
+  }
+};
+
+/**
+ * Fetch messages in a conversation with a specific user
+ */
+export const fetchConversationMessages = async (partnerId: string): Promise<Message[]> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const { data: messages, error } = await supabase
+      .from('messages')
+      .select(`
+        *,
+        sender_profile:profiles!messages_sender_id_fkey (
+          user_id,
+          full_name,
+          profile_image,
+          institutional_email
+        )
+      `)
+      .or(`and(sender_id.eq.${user.id},recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.${user.id})`)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching conversation messages:', error);
+      throw new Error(`Failed to fetch messages: ${error.message}`);
+    }
+
+    return messages || [];
+  } catch (error) {
+    console.error('Error fetching conversation messages:', error);
+    throw error;
+  }
+};
+
+/**
+ * Send a message
+ */
+export const sendMessage = async (params: {
+  recipientId: string;
+  subject: string;
+  content: string;
+  attachments?: any[];
+  replyToMessageId?: string;
+}): Promise<Message> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const { data: message, error } = await supabase
+      .from('messages')
+      .insert({
+        sender_id: user.id,
+        recipient_id: params.recipientId,
+        subject: params.subject,
+        text: params.content,
+        attachments: params.attachments || [],
+        reply_to_message_id: params.replyToMessageId,
+        is_read: false,
+        priority: 'normal',
+        message_type: 'message'
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error sending message:', error);
+      throw new Error(`Failed to send message: ${error.message}`);
+    }
+
+    return message;
+  } catch (error) {
+    console.error('Error sending message:', error);
+    throw error;
+  }
+};
+
+/**
+ * Mark message as read
+ */
+export const markMessageAsRead = async (messageId: string): Promise<void> => {
+  try {
+    const { error } = await supabase
+      .from('messages')
+      .update({ is_read: true })
+      .eq('id', messageId);
+
+    if (error) {
+      console.error('Error marking message as read:', error);
+      throw new Error(`Failed to mark message as read: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('Error marking message as read:', error);
+    throw error;
+  }
+};
+
+/**
+ * Mark all messages in a conversation as read
+ */
+export const markConversationAsRead = async (partnerId: string): Promise<void> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const { error } = await supabase
+      .from('messages')
+      .update({ is_read: true })
+      .eq('sender_id', partnerId)
+      .eq('recipient_id', user.id)
+      .eq('is_read', false);
+
+    if (error) {
+      console.error('Error marking conversation as read:', error);
+      throw new Error(`Failed to mark conversation as read: ${error.message}`);
+    }
+  } catch (error) {
+    console.error('Error marking conversation as read:', error);
+    throw error;
+  }
+};
+
+/**
+ * Search users for messaging
+ */
+export const searchUsersForMessaging = async (query: string): Promise<any[]> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const { data: users, error } = await supabase
+      .from('profiles')
+      .select('user_id, full_name, profile_image, institutional_email')
+      .neq('user_id', user.id)
+      .ilike('full_name', `%${query}%`)
+      .limit(10);
+
+    if (error) {
+      console.error('Error searching users:', error);
+      throw new Error(`Failed to search users: ${error.message}`);
+    }
+
+    return users || [];
+  } catch (error) {
+    console.error('Error searching users:', error);
     throw error;
   }
 };
