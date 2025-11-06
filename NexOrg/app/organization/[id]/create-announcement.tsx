@@ -8,14 +8,17 @@ import {
   TouchableOpacity,
   View,
   TextInput,
-  Alert
+  Alert,
+  Image
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 
 export default function CreateAnnouncementScreen() {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('');
   const [content, setContent] = useState('');
   const [imageUrl, setImageUrl] = useState('');
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
 
   const categories = [
@@ -28,13 +31,40 @@ export default function CreateAnnouncementScreen() {
     'Reminder'
   ];
 
+  const pickImage = async () => {
+    // Request permission
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please grant permission to access your photos');
+      return;
+    }
+
+    // Launch image picker
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [16, 9],
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      setSelectedImage(result.assets[0].uri);
+      setImageUrl(''); // Clear URL input when image is selected
+    }
+  };
+
+  const removeImage = () => {
+    setSelectedImage(null);
+  };
+
   const handlePost = () => {
     if (!title.trim() || !content.trim()) {
       Alert.alert('Error', 'Please fill in the title and content fields.');
       return;
     }
 
-    // TODO: Implement actual posting logic
+    // TODO: Implement actual posting logic with image upload
     Alert.alert('Success', 'Announcement posted successfully!', [
       { text: 'OK', onPress: () => router.back() }
     ]);
@@ -121,17 +151,37 @@ export default function CreateAnnouncementScreen() {
           />
         </View>
 
-        {/* Image URL Field */}
+        {/* Image Upload Section */}
         <View style={styles.fieldContainer}>
-          <ThemedText style={styles.fieldLabel}>Image (optional URL)</ThemedText>
-          <TextInput
-            style={styles.textInput}
-            value={imageUrl}
-            onChangeText={setImageUrl}
-            placeholder="https://example.com/image.jpg"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="url"
-          />
+          <ThemedText style={styles.fieldLabel}>Image (optional)</ThemedText>
+          
+          {selectedImage ? (
+            <View style={styles.imagePreviewContainer}>
+              <Image source={{ uri: selectedImage }} style={styles.imagePreview} />
+              <TouchableOpacity style={styles.removeImageButton} onPress={removeImage}>
+                <IconSymbol name="xmark.circle.fill" size={24} color="#EF4444" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.uploadButton} onPress={pickImage}>
+              <IconSymbol name="photo" size={24} color="#6B7280" />
+              <ThemedText style={styles.uploadButtonText}>Choose from gallery</ThemedText>
+            </TouchableOpacity>
+          )}
+          
+          {!selectedImage && (
+            <>
+              <ThemedText style={styles.orText}>OR</ThemedText>
+              <TextInput
+                style={styles.textInput}
+                value={imageUrl}
+                onChangeText={setImageUrl}
+                placeholder="Paste image URL"
+                placeholderTextColor="#9CA3AF"
+                keyboardType="url"
+              />
+            </>
+          )}
         </View>
 
         {/* Post Button */}
@@ -258,5 +308,45 @@ const styles = StyleSheet.create({
   },
   bottomPadding: {
     height: 40,
+  },
+  uploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
+    borderStyle: 'dashed',
+    borderRadius: 8,
+    paddingVertical: 32,
+    backgroundColor: '#F9FAFB',
+  },
+  uploadButtonText: {
+    fontSize: 16,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  imagePreviewContainer: {
+    position: 'relative',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  imagePreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'white',
+    borderRadius: 12,
+  },
+  orText: {
+    textAlign: 'center',
+    color: '#9CA3AF',
+    fontSize: 14,
+    marginVertical: 12,
   },
 });

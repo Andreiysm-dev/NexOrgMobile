@@ -4,9 +4,6 @@
 
 import { supabase } from './supabase';
 
-// Debug environment variables
-console.log('Using direct Supabase connection like web app');
-
 export interface Department {
   department_id: string;
   name: string;
@@ -28,7 +25,7 @@ export interface DropdownOption {
  */
 export const fetchDepartments = async (): Promise<Department[]> => {
   try {
-    console.log('Fetching departments directly from Supabase...');
+
     
     const { data: departments, error } = await supabase
       .from('departments')
@@ -40,8 +37,8 @@ export const fetchDepartments = async (): Promise<Department[]> => {
       throw new Error(`Failed to fetch departments: ${error.message}`);
     }
 
-    console.log('Found departments:', departments?.length || 0);
-    console.log('Raw departments data:', departments);
+
+
 
     // Process departments to ensure courses are properly parsed (same as web app)
     const processedDepartments = departments?.map(dept => {
@@ -121,7 +118,7 @@ export const coursesToDropdownOptions = (courses: Course[]): DropdownOption[] =>
  */
 export const fetchInterests = async (): Promise<any[]> => {
   try {
-    console.log('Fetching interests directly from Supabase...');
+
     
     const { data: tags, error } = await supabase
       .from('org_tags')
@@ -133,7 +130,7 @@ export const fetchInterests = async (): Promise<any[]> => {
       throw new Error(`Failed to fetch interests: ${error.message}`);
     }
 
-    console.log('Found interests/tags:', tags?.length || 0);
+
 
     // Transform tag_name to name for frontend compatibility (same as web app)
     const transformedTags = tags?.map(tag => ({
@@ -143,7 +140,7 @@ export const fetchInterests = async (): Promise<any[]> => {
       label: tag.tag_name  // For dropdown compatibility
     })) || [];
 
-    console.log('Processed interests:', transformedTags);
+
     
     return transformedTags;
   } catch (error) {
@@ -157,11 +154,11 @@ export const fetchInterests = async (): Promise<any[]> => {
  */
 export const uploadProfileImage = async (imageUri: string, userId: string): Promise<string | null> => {
   try {
-    console.log('Uploading profile image to Supabase Storage...');
+
     
     // For now, return the image URI as placeholder
     // TODO: Implement actual Supabase Storage upload when file upload is ready
-    console.log('Profile image upload placeholder - returning URI:', imageUri);
+
     return imageUri;
     
     /* TODO: Uncomment when ready for actual upload
@@ -188,7 +185,7 @@ export const uploadProfileImage = async (imageUri: string, userId: string): Prom
       .from('profile-images')
       .getPublicUrl(fileName);
 
-    console.log('Profile image uploaded successfully:', publicUrl);
+
     return publicUrl;
     */
   } catch (error) {
@@ -201,7 +198,7 @@ export const uploadProfileImage = async (imageUri: string, userId: string): Prom
  * Create user profile directly via Supabase (same as web app fallback)
  */
 export const createUserProfile = async (profileData: any) => {
-  console.log('Creating user profile directly via Supabase:', profileData);
+
   
   try {
     let profileImageUrl = null;
@@ -238,7 +235,7 @@ export const createUserProfile = async (profileData: any) => {
       throw new Error(`Failed to create profile: ${error.message}`);
     }
 
-    console.log('Profile created successfully via Supabase:', profile);
+
     return { profile };
   } catch (error) {
     console.error('Error creating user profile via Supabase:', error);
@@ -251,7 +248,7 @@ export const createUserProfile = async (profileData: any) => {
  */
 export const fetchUserOrganizations = async (): Promise<any[]> => {
   try {
-    console.log('Fetching user organizations from Supabase...');
+
     
     // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -284,7 +281,7 @@ export const fetchUserOrganizations = async (): Promise<any[]> => {
       throw new Error(`Failed to fetch organizations: ${error.message}`);
     }
 
-    console.log('Found user organizations:', memberships?.length || 0);
+
 
     // Transform data for mobile app compatibility
     const transformedOrgs = memberships?.map((membership: any) => ({
@@ -301,7 +298,7 @@ export const fetchUserOrganizations = async (): Promise<any[]> => {
       color: generateOrgColor(membership.organizations.org_name)
     })) || [];
 
-    console.log('Processed user organizations:', transformedOrgs);
+
     
     return transformedOrgs;
   } catch (error) {
@@ -333,7 +330,7 @@ const generateOrgColor = (orgName: string): string => {
  */
 export const fetchOrganizationMemberCounts = async (orgIds: string[]): Promise<{ [key: string]: number }> => {
   try {
-    console.log('Fetching member counts for organizations:', orgIds);
+
     
     if (!orgIds || orgIds.length === 0) {
       return {};
@@ -355,7 +352,7 @@ export const fetchOrganizationMemberCounts = async (orgIds: string[]): Promise<{
       counts[member.org_id] = (counts[member.org_id] || 0) + 1;
     });
 
-    console.log('Member counts:', counts);
+
     return counts;
   } catch (error) {
     console.error('Error fetching organization member counts:', error);
@@ -513,7 +510,7 @@ export const fetchUserAnnouncementsRaw = async (): Promise<any[]> => {
  */
 export const fetchUserAnnouncements = async (): Promise<any[]> => {
   try {
-    console.log('Fetching user announcements from Supabase...');
+
     
     // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -529,7 +526,7 @@ export const fetchUserAnnouncements = async (): Promise<any[]> => {
       .eq('user_id', user.id);
 
     if (memberError || !memberships || memberships.length === 0) {
-      console.log('No organization memberships found');
+
       return [];
     }
 
@@ -554,11 +551,11 @@ export const fetchUserAnnouncements = async (): Promise<any[]> => {
       .limit(10);
 
     if (announcementError) {
-      console.log('Error fetching announcements:', announcementError);
+
       return [];
     }
 
-    console.log('Successfully fetched announcements:', announcements?.length || 0);
+
 
     return announcements?.map((announcement: any) => ({
       id: announcement.announcement_id,
@@ -581,7 +578,7 @@ export const fetchUserAnnouncements = async (): Promise<any[]> => {
  */
 export const fetchUserEvents = async (): Promise<any[]> => {
   try {
-    console.log('Fetching user events from Supabase...');
+
     
     // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -597,7 +594,7 @@ export const fetchUserEvents = async (): Promise<any[]> => {
       .eq('user_id', user.id);
 
     if (memberError || !memberships || memberships.length === 0) {
-      console.log('No organization memberships found');
+
       return [];
     }
 
@@ -624,7 +621,7 @@ export const fetchUserEvents = async (): Promise<any[]> => {
       .limit(10);
 
     if (eventError) {
-      console.log('No events table or error fetching:', eventError);
+
       return [];
     }
 
@@ -648,7 +645,7 @@ export const fetchUserEvents = async (): Promise<any[]> => {
  */
 export const fetchAllOrganizations = async (): Promise<any[]> => {
   try {
-    console.log('Fetching all organizations from Supabase...');
+
     
     // Fetch all organizations with member count (matching web version schema)
     const { data: organizations, error } = await supabase
@@ -674,7 +671,7 @@ export const fetchAllOrganizations = async (): Promise<any[]> => {
       throw new Error(`Failed to fetch organizations: ${error.message}`);
     }
 
-    console.log('Found organizations:', organizations?.length || 0);
+
 
     // Transform data for mobile app compatibility (matching web version)
     const transformedOrgs = organizations?.map((org: any) => ({
@@ -695,7 +692,7 @@ export const fetchAllOrganizations = async (): Promise<any[]> => {
       advisers: org.adviser_list || []
     })) || [];
 
-    console.log('Processed organizations:', transformedOrgs.length);
+
     
     return transformedOrgs;
   } catch (error) {
@@ -780,7 +777,7 @@ const categorizeOrgType = (orgName: string, description: string): 'Academic' | '
  */
 export const fetchOrganizationById = async (orgId: string): Promise<any> => {
   try {
-    console.log('Fetching organization by ID:', orgId);
+
     
     // Fetch organization with member count (matching web version schema)
     const { data: organization, error } = await supabase
@@ -814,7 +811,7 @@ export const fetchOrganizationById = async (orgId: string): Promise<any> => {
       throw new Error('Organization not found');
     }
 
-    console.log('Found organization:', organization.org_name);
+
 
     // Fetch advisers with profile information (like web version)
     let advisers: Array<{email: string; full_name: string}> = [];
@@ -905,7 +902,7 @@ export const fetchOrganizationById = async (orgId: string): Promise<any> => {
       allowOutsideDept: organization.allow_outside_dept || false
     };
 
-    console.log('Processed organization:', transformedOrg);
+
     
     return transformedOrg;
   } catch (error) {
@@ -919,7 +916,7 @@ export const fetchOrganizationById = async (orgId: string): Promise<any> => {
  */
 export const fetchOrganizationMembers = async (orgId: string): Promise<any[]> => {
   try {
-    console.log('Fetching organization members for org:', orgId);
+
     
     // Fetch members with profile information
     const { data: members, error } = await supabase
@@ -946,7 +943,7 @@ export const fetchOrganizationMembers = async (orgId: string): Promise<any[]> =>
       throw new Error(`Failed to fetch members: ${error.message}`);
     }
 
-    console.log('Found organization members:', members?.length || 0);
+
 
     // Transform data for mobile app compatibility
     const transformedMembers = members?.map((member: any) => ({
@@ -961,7 +958,7 @@ export const fetchOrganizationMembers = async (orgId: string): Promise<any[]> =>
       profileRole: member.profiles?.role || 'student'
     })) || [];
 
-    console.log('Processed organization members:', transformedMembers.length);
+
     
     return transformedMembers;
   } catch (error) {
@@ -975,7 +972,7 @@ export const fetchOrganizationMembers = async (orgId: string): Promise<any[]> =>
  */
 export const fetchOrganizationEvents = async (orgId: string): Promise<any[]> => {
   try {
-    console.log('Fetching organization events for org:', orgId);
+
     
     // Fetch events exactly like web dashboard: only from events table
     const { data: events, error } = await supabase
@@ -985,12 +982,12 @@ export const fetchOrganizationEvents = async (orgId: string): Promise<any[]> => 
       .order('scheduled_at', { ascending: true });
 
     if (error) {
-      console.log('Error fetching events:', error);
+
       return [];
     }
 
-    console.log('Found events:', events?.length || 0);
-    console.log('Raw events data:', events);
+
+
     
     // Also check if there are ANY events in the database for debugging
     const { data: allEvents, error: allEventsError } = await supabase
@@ -998,8 +995,8 @@ export const fetchOrganizationEvents = async (orgId: string): Promise<any[]> => 
       .select('event_id, title, org_id, scheduled_at')
       .limit(10);
     
-    console.log('ALL EVENTS IN DATABASE (first 10):', allEvents);
-    console.log('Total events query error:', allEventsError);
+
+
 
     // Transform data exactly like web version
     const transformedEvents = (events || []).map((event: any) => ({
@@ -1012,7 +1009,7 @@ export const fetchOrganizationEvents = async (orgId: string): Promise<any[]> => 
       scheduled_at: event.scheduled_at
     }));
 
-    console.log('Transformed events:', transformedEvents);
+
     
     return transformedEvents;
   } catch (error) {
@@ -1026,7 +1023,7 @@ export const fetchOrganizationEvents = async (orgId: string): Promise<any[]> => 
  */
 export const fetchOrganizationAnnouncements = async (orgId: string): Promise<any[]> => {
   try {
-    console.log('Fetching organization announcements for org:', orgId);
+
     
     // Fetch announcements from the organization (using same structure as web version)
     const { data: announcements, error } = await supabase
@@ -1036,16 +1033,16 @@ export const fetchOrganizationAnnouncements = async (orgId: string): Promise<any
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.log('No announcements table or error fetching announcements:', error);
+
       return [];
     }
 
-    console.log('Found organization announcements:', announcements?.length || 0);
+
 
     // Return announcements with same structure as web version
     const transformedAnnouncements = announcements || [];
 
-    console.log('Processed organization announcements:', transformedAnnouncements.length);
+
     
     return transformedAnnouncements;
   } catch (error) {
@@ -1104,7 +1101,7 @@ const getContactFromAdvisers = (adviserList: any[]): string => {
  */
 export const updateOrganization = async (orgId: string, updateData: any): Promise<any> => {
   try {
-    console.log('Updating organization:', orgId, updateData);
+
     
     // Map mobile form data to database schema
     const dbUpdateData: any = {};
@@ -1129,7 +1126,7 @@ export const updateOrganization = async (orgId: string, updateData: any): Promis
       throw new Error(`Failed to update organization: ${error.message}`);
     }
 
-    console.log('Organization updated successfully:', data);
+
     return data;
   } catch (error) {
     console.error('Error updating organization:', error);
@@ -1147,7 +1144,14 @@ export const createAnnouncement = async (orgId: string, announcementData: {
   sendToTeams?: boolean;
 }): Promise<any> => {
   try {
-    console.log('Creating announcement for org:', orgId, announcementData);
+    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    const authorId = user?.id || session?.user?.id;
+    
+    if (!authorId) {
+      return { error: 'Authentication required' };
+    }
     
     const { data: announcement, error } = await supabase
       .from('announcements')
@@ -1157,17 +1161,16 @@ export const createAnnouncement = async (orgId: string, announcementData: {
         content: announcementData.content,
         image: announcementData.image,
         send_to_teams: announcementData.sendToTeams || false,
-        teams_message_sent: false
+        teams_message_sent: false,
+        created_by: authorId
       })
-      .select('announcement_id, org_id, title, content, created_at, image, send_to_teams, teams_message_sent, teams_sent_at')
+      .select('announcement_id, org_id, title, content, created_at, image, send_to_teams, teams_message_sent, teams_sent_at, created_by')
       .single();
 
     if (error) {
-      console.error('Error creating announcement:', error);
       throw new Error(`Failed to create announcement: ${error.message}`);
     }
 
-    console.log('Created announcement:', announcement);
     return { announcement };
   } catch (error) {
     console.error('Error creating announcement:', error);
@@ -1184,7 +1187,7 @@ export const updateAnnouncement = async (orgId: string, announcementId: string, 
   image?: string | null;
 }): Promise<any> => {
   try {
-    console.log('Updating announcement:', announcementId, announcementData);
+
     
     const { data: announcement, error } = await supabase
       .from('announcements')
@@ -1203,7 +1206,7 @@ export const updateAnnouncement = async (orgId: string, announcementId: string, 
       throw new Error(`Failed to update announcement: ${error.message}`);
     }
 
-    console.log('Updated announcement:', announcement);
+
     return { announcement };
   } catch (error) {
     console.error('Error updating announcement:', error);
@@ -1216,7 +1219,7 @@ export const updateAnnouncement = async (orgId: string, announcementId: string, 
  */
 export const deleteAnnouncement = async (orgId: string, announcementId: string): Promise<void> => {
   try {
-    console.log('Deleting announcement:', announcementId);
+
     
     const { error } = await supabase
       .from('announcements')
@@ -1229,7 +1232,7 @@ export const deleteAnnouncement = async (orgId: string, announcementId: string):
       throw new Error(`Failed to delete announcement: ${error.message}`);
     }
 
-    console.log('Deleted announcement:', announcementId);
+
   } catch (error) {
     console.error('Error deleting announcement:', error);
     throw error;
@@ -1241,7 +1244,7 @@ export const deleteAnnouncement = async (orgId: string, announcementId: string):
  */
 export const fetchAllPosts = async (): Promise<any[]> => {
   try {
-    console.log('Fetching all posts for feed...');
+
     
     // Get current user
     const { data: { user } } = await supabase.auth.getUser();
@@ -1325,7 +1328,7 @@ export const fetchAllPosts = async (): Promise<any[]> => {
       comment_count: commentCountMap[post.post_id] || 0
     }));
 
-    console.log('Found feed posts:', postsWithCounts.length);
+
     return postsWithCounts;
   } catch (error) {
     console.error('Error fetching feed posts:', error);
@@ -1338,7 +1341,7 @@ export const fetchAllPosts = async (): Promise<any[]> => {
  */
 export const fetchAllAnnouncements = async (): Promise<any[]> => {
   try {
-    console.log('Fetching all announcements for feed...');
+
     
     // First check if announcements exist
     const { data: allAnnouncements, error: allAnnouncementsError } = await supabase
@@ -1346,7 +1349,7 @@ export const fetchAllAnnouncements = async (): Promise<any[]> => {
       .select('*')
       .limit(10);
     
-    console.log('All announcements check:', allAnnouncements?.length || 0, 'Error:', allAnnouncementsError);
+
     
     const { data: announcements, error } = await supabase
       .from('announcements')
@@ -1375,7 +1378,7 @@ export const fetchAllAnnouncements = async (): Promise<any[]> => {
         .order('created_at', { ascending: false })
         .limit(50);
       
-      console.log('Simple announcements fallback:', simpleAnnouncements?.length || 0, 'Error:', simpleError);
+
       
       if (simpleAnnouncements && simpleAnnouncements.length > 0) {
         // Get unique org_ids
@@ -1387,7 +1390,7 @@ export const fetchAllAnnouncements = async (): Promise<any[]> => {
           .select('org_id, org_name, org_pic')
           .in('org_id', orgIds);
         
-        console.log('Fetched organizations for announcements separately:', orgs?.length || 0, 'Error:', orgsError);
+
         
         // Merge announcements with organization data
         const announcementsWithOrgs = simpleAnnouncements.map(announcement => ({
@@ -1401,8 +1404,8 @@ export const fetchAllAnnouncements = async (): Promise<any[]> => {
       return simpleAnnouncements || [];
     }
 
-    console.log('Found feed announcements with organizations:', announcements?.length || 0);
-    console.log('Sample announcement data:', announcements?.[0]);
+
+
     return announcements || [];
   } catch (error) {
     console.error('Error fetching feed announcements:', error);
@@ -1415,7 +1418,7 @@ export const fetchAllAnnouncements = async (): Promise<any[]> => {
  */
 export const fetchOrganizationPosts = async (orgId: string): Promise<any[]> => {
   try {
-    console.log('Fetching organization posts for org:', orgId);
+
     
     const { data: posts, error } = await supabase
       .from('organization_posts')
@@ -1424,11 +1427,11 @@ export const fetchOrganizationPosts = async (orgId: string): Promise<any[]> => {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.log('No posts table or error fetching posts:', error);
+
       return [];
     }
 
-    console.log('Found organization posts:', posts?.length || 0);
+
     return posts || [];
   } catch (error) {
     console.error('Error fetching organization posts:', error);
@@ -1446,7 +1449,14 @@ export const createPost = async (orgId: string, postData: {
   visibility: string;
 }): Promise<any> => {
   try {
-    console.log('Creating post for org:', orgId, postData);
+    const { data: { session } } = await supabase.auth.getSession();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    const authorId = user?.id || session?.user?.id;
+    
+    if (!authorId) {
+      return { error: 'Authentication required' };
+    }
     
     const { data: post, error } = await supabase
       .from('organization_posts')
@@ -1456,17 +1466,15 @@ export const createPost = async (orgId: string, postData: {
         content: postData.content,
         media_url: postData.media_url,
         visibility: postData.visibility,
-        author_id: null // TODO: Add proper user authentication
+        author_id: authorId
       })
       .select('post_id, org_id, title, content, created_at, media_url, visibility, author_id')
       .single();
 
     if (error) {
-      console.error('Error creating post:', error);
       throw new Error(`Failed to create post: ${error.message}`);
     }
 
-    console.log('Created post:', post);
     return { post };
   } catch (error) {
     console.error('Error creating post:', error);
@@ -1484,7 +1492,7 @@ export const updatePost = async (orgId: string, postId: string, postData: {
   visibility: string;
 }): Promise<any> => {
   try {
-    console.log('Updating post:', postId, postData);
+
     
     const { data: post, error } = await supabase
       .from('organization_posts')
@@ -1504,7 +1512,7 @@ export const updatePost = async (orgId: string, postId: string, postData: {
       throw new Error(`Failed to update post: ${error.message}`);
     }
 
-    console.log('Updated post:', post);
+
     return { post };
   } catch (error) {
     console.error('Error updating post:', error);
@@ -1517,7 +1525,7 @@ export const updatePost = async (orgId: string, postId: string, postData: {
  */
 export const deletePost = async (orgId: string, postId: string): Promise<void> => {
   try {
-    console.log('Deleting post:', postId);
+
     
     const { error } = await supabase
       .from('organization_posts')
@@ -1530,7 +1538,7 @@ export const deletePost = async (orgId: string, postId: string): Promise<void> =
       throw new Error(`Failed to delete post: ${error.message}`);
     }
 
-    console.log('Deleted post:', postId);
+
   } catch (error) {
     console.error('Error deleting post:', error);
     throw error;
@@ -1559,7 +1567,7 @@ export interface PostComment {
  */
 export const fetchPostComments = async (postId: string): Promise<PostComment[]> => {
   try {
-    console.log('Fetching comments for post:', postId);
+
     
     if (!postId) {
       console.error('Post ID is undefined');
@@ -1632,7 +1640,7 @@ export const fetchPostComments = async (postId: string): Promise<PostComment[]> 
       }
     });
 
-    console.log('Fetched comments:', rootComments.length);
+
     return rootComments;
   } catch (error) {
     console.error('Error fetching comments:', error);
@@ -1649,7 +1657,7 @@ export const addPostComment = async (
   replyToCommentId?: string
 ): Promise<PostComment> => {
   try {
-    console.log('Adding comment to post:', postId);
+
     
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('User not authenticated');
@@ -1684,7 +1692,7 @@ export const addPostComment = async (
       .eq('user_id', user.id)
       .single();
 
-    console.log('Added comment:', comment.comment_id);
+
     return {
       ...comment,
       profile: profile || { full_name: 'Unknown User' },
@@ -1701,7 +1709,7 @@ export const addPostComment = async (
  */
 export const deletePostComment = async (commentId: string): Promise<void> => {
   try {
-    console.log('Deleting comment:', commentId);
+
     
     const { error } = await supabase
       .from('post_comments')
@@ -1713,7 +1721,7 @@ export const deletePostComment = async (commentId: string): Promise<void> => {
       throw new Error(`Failed to delete comment: ${error.message}`);
     }
 
-    console.log('Deleted comment:', commentId);
+
   } catch (error) {
     console.error('Error deleting comment:', error);
     throw error;

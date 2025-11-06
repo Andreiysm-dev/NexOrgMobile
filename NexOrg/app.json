@@ -17,7 +17,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.andreilis.NexOrg_Mobile_Application"
+      "package": "com.toblux23.NexOrg_Mobile_Application"
     },
     "web": {
       "bundler": "metro",
@@ -42,8 +42,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "f869ddaf-318d-405b-af0e-3df8dc02cabf"
+        "projectId": "eb59c6a8-f38a-4aa2-954f-0d025d4e52c5"
       }
-    }
+    },
+    "owner": "toblux23"
   }
 }

@@ -21,13 +21,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/components/ui/IconSymbol';
 import { useAuth } from '@/hooks/useAuth';
 import { canPostAnnouncements, canManageMembers } from '@/lib/mockRoles';
-import { fetchOrganizationById, fetchOrganizationMembers, fetchOrganizationEvents } from '@/lib/api';
+import { fetchOrganizationById, fetchOrganizationMembers, fetchOrganizationEvents, createPost, createAnnouncement, updatePost, updateAnnouncement, deleteAnnouncement } from '@/lib/api';
 import { deletePost } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { PostCard } from '@/components/feed/PostCard';
 import { AnnouncementCard } from '@/components/feed/AnnouncementCard';
 import { PollCard } from '@/components/feed/PollCard';
 import { PostModal } from '@/components/feed/PostModal';
+// Image picker - requires native rebuild for remote users
+let ImagePicker: any = null;
+try {
+  ImagePicker = require('expo-image-picker');
+} catch (e) {
+  console.warn('ImagePicker not available - native module not installed');
+}
 
 const { width } = Dimensions.get('window');
 
@@ -120,11 +127,13 @@ const fetchOrganizationAnnouncements = async (orgId: string) => {
 
 const fetchOrganizationPosts = async (orgId: string) => {
   try {
-
-    // Fetch posts for this organization
+    // Fetch posts for this organization with organization info
     const { data: posts, error: postsError } = await supabase
       .from('organization_posts')
-      .select('*')
+      .select(`
+        *,
+        organizations!inner(org_id, org_name, org_pic)
+      `)
       .eq('org_id', orgId)
       .order('created_at', { ascending: false });
 
@@ -133,9 +142,18 @@ const fetchOrganizationPosts = async (orgId: string) => {
       return [];
     }
 
+    if (!posts || posts.length === 0) {
+      return [];
+    }
+
     // For each post, get like and comment counts
     const postsWithCounts = await Promise.all(
-      (posts || []).map(async (post) => {
+      posts.map(async (post) => {
+        if (!post || !post.post_id) {
+          console.warn('Invalid post object:', post);
+          return null;
+        }
+
         // Get like count
         const { count: likeCount } = await supabase
           .from('post_likes')
@@ -152,11 +170,13 @@ const fetchOrganizationPosts = async (orgId: string) => {
           ...post,
           like_count: likeCount || 0,
           comment_count: commentCount || 0,
+          created_at: post.created_at || new Date().toISOString(),
         };
       })
     );
 
-    return postsWithCounts;
+    // Filter out any null values
+    return postsWithCounts.filter(post => post !== null);
   } catch (error) {
     console.error('Error in fetchOrganizationPosts:', error);
     return [];
@@ -278,77 +298,7 @@ const fetchOrganizationPolls = async (orgId: string) => {
   }
 };
 
-const createAnnouncement = async (orgId: string, data: any) => {
-  try {
-    const response = await fetch(`https://nexorg.vercel.app/api/organizations/${orgId}/announcements`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    const result = await response.json();
-    return result;
-  } catch (error) {
-    console.error('Error creating announcement:', error);
-    throw error;
-  }
-};
-
-const updateAnnouncement = async (orgId: string, announcementId: string, data: any) => {
-  try {
-    const response = await fetch(`https://nexorg.vercel.app/api/organizations/${orgId}/announcements/${announcementId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    const result = await response.json();
-    return result;
-  } catch (error) {
-    console.error('Error updating announcement:', error);
-    throw error;
-  }
-};
-
-const deleteAnnouncement = async (orgId: string, announcementId: string) => {
-  try {
-    const response = await fetch(`https://nexorg.vercel.app/api/organizations/${orgId}/announcements/${announcementId}`, {
-      method: 'DELETE',
-    });
-    return { success: true };
-  } catch (error) {
-    console.error('Error deleting announcement:', error);
-    throw error;
-  }
-};
-
-const createPost = async (orgId: string, data: any) => {
-  try {
-    const response = await fetch(`https://nexorg.vercel.app/api/organizations/${orgId}/posts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    const result = await response.json();
-    return result;
-  } catch (error) {
-    console.error('Error creating post:', error);
-    throw error;
-  }
-};
-
-const updatePost = async (orgId: string, postId: string, data: any) => {
-  try {
-    const response = await fetch(`https://nexorg.vercel.app/api/organizations/${orgId}/posts/${postId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    const result = await response.json();
-    return result;
-  } catch (error) {
-    console.error('Error updating post:', error);
-    throw error;
-  }
-};
+// Old local API functions removed - now using imports from @/lib/api
 
 const createJoinRequest = async (orgId: string, userId: string) => {
   return { success: true };
@@ -406,6 +356,7 @@ export default function OrganizationDetailScreen() {
     image: '',
     sendToTeams: false
   });
+  const [selectedAnnouncementImage, setSelectedAnnouncementImage] = useState<string | null>(null);
   const [isCreatingAnnouncement, setIsCreatingAnnouncement] = useState(false);
   const [isUpdatingAnnouncement, setIsUpdatingAnnouncement] = useState(false);
   const [dateFilter, setDateFilter] = useState('all');
@@ -424,6 +375,7 @@ export default function OrganizationDetailScreen() {
     media_url: '',
     visibility: 'public'
   });
+  const [selectedPostImage, setSelectedPostImage] = useState<string | null>(null);
   const [isCreatingPost, setIsCreatingPost] = useState(false);
   const [isUpdatingPost, setIsUpdatingPost] = useState(false);
   
@@ -849,13 +801,14 @@ export default function OrganizationDetailScreen() {
       const data = await createAnnouncement(id as string, {
         title: announcementForm.title.trim(),
         content: announcementForm.content.trim(),
-        image: announcementForm.image.trim() || null,
+        image: selectedAnnouncementImage || announcementForm.image.trim() || null,
         sendToTeams: announcementForm.sendToTeams
       });
 
       setAnnouncements(prev => [data.announcement, ...prev]);
       setShowAnnouncementModal(false);
       setAnnouncementForm({ title: '', content: '', image: '', sendToTeams: false });
+      setSelectedAnnouncementImage(null);
       Alert.alert('Success', 'Announcement created successfully!');
     } catch (error) {
       console.error('Failed to create announcement:', error);
@@ -933,6 +886,66 @@ export default function OrganizationDetailScreen() {
     );
   };
 
+  // Image picker for posts
+  const pickPostImage = async () => {
+    if (!ImagePicker) {
+      Alert.alert('Image Picker Unavailable', 'Please rebuild the app to use image picker');
+      return;
+    }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please grant permission to access your photos');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [16, 9],
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      setSelectedPostImage(result.assets[0].uri);
+      setPostForm(prev => ({ ...prev, media_url: '' }));
+    }
+  };
+
+  const removePostImage = () => {
+    setSelectedPostImage(null);
+  };
+
+  // Image picker for announcements
+  const pickAnnouncementImage = async () => {
+    if (!ImagePicker) {
+      Alert.alert('Image Picker Unavailable', 'Please rebuild the app to use image picker');
+      return;
+    }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please grant permission to access your photos');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [16, 9],
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      setSelectedAnnouncementImage(result.assets[0].uri);
+      setAnnouncementForm(prev => ({ ...prev, image: '' }));
+    }
+  };
+
+  const removeAnnouncementImage = () => {
+    setSelectedAnnouncementImage(null);
+  };
+
   // Handle create post
   const handleCreatePost = async () => {
     if (!postForm.title.trim() || !postForm.content.trim()) {
@@ -946,13 +959,24 @@ export default function OrganizationDetailScreen() {
       const data = await createPost(id as string, {
         title: postForm.title.trim(),
         content: postForm.content.trim(),
-        media_url: postForm.media_url.trim() || null,
+        media_url: selectedPostImage || postForm.media_url.trim() || null,
         visibility: postForm.visibility
       });
-
+      
+      if (data.error) {
+        Alert.alert('Error', data.error);
+        return;
+      }
+      
+      if (!data.post) {
+        Alert.alert('Error', 'Failed to create post');
+        return;
+      }
+      
       setPosts(prev => [data.post, ...prev]);
       setShowPostModal(false);
       setPostForm({ title: '', content: '', media_url: '', visibility: 'public' });
+      setSelectedPostImage(null);
       Alert.alert('Success', 'Post created successfully!');
     } catch (error) {
       console.error('Failed to create post:', error);
@@ -1234,38 +1258,46 @@ export default function OrganizationDetailScreen() {
 
     // Add posts
     posts.forEach((post: any) => {
-      feedItems.push({
-        ...post,
-        type: 'post',
-        sortDate: new Date(post.created_at).getTime()
-      });
+      if (post && post.created_at) {
+        feedItems.push({
+          ...post,
+          type: 'post',
+          sortDate: new Date(post.created_at).getTime()
+        });
+      }
     });
 
     // Add announcements
     announcements.forEach((announcement: any) => {
-      feedItems.push({
-        ...announcement,
-        type: 'announcement',
-        sortDate: new Date(announcement.created_at).getTime()
-      });
+      if (announcement && announcement.created_at) {
+        feedItems.push({
+          ...announcement,
+          type: 'announcement',
+          sortDate: new Date(announcement.created_at).getTime()
+        });
+      }
     });
 
     // Add events
     events.forEach((event: any) => {
-      feedItems.push({
-        ...event,
-        type: 'event',
-        sortDate: new Date(event.date || event.created_at || Date.now()).getTime()
-      });
+      if (event) {
+        feedItems.push({
+          ...event,
+          type: 'event',
+          sortDate: new Date(event.date || event.created_at || Date.now()).getTime()
+        });
+      }
     });
 
     // Add polls
     polls.forEach((poll: any) => {
-      feedItems.push({
-        ...poll,
-        type: 'poll',
-        sortDate: new Date(poll.created_at).getTime()
-      });
+      if (poll && poll.created_at) {
+        feedItems.push({
+          ...poll,
+          type: 'poll',
+          sortDate: new Date(poll.created_at).getTime()
+        });
+      }
     });
 
     // Sort: pinned posts first, then by date (newest first)
@@ -1295,7 +1327,8 @@ export default function OrganizationDetailScreen() {
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       
       filteredItems = filteredItems.filter(item => {
-        const itemDate = new Date(item.created_at || item.date);
+        if (!item) return false;
+        const itemDate = new Date(item.created_at || item.date || Date.now());
         
         if (dateFilter === 'today') {
           const itemDay = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate());
@@ -2989,21 +3022,81 @@ export default function OrganizationDetailScreen() {
 
               <View style={{ marginBottom: 20 }}>
                 <ThemedText style={{ fontSize: 14, fontWeight: '500', color: '#374151', marginBottom: 8 }}>
-                  Media URL (Optional)
+                  Image (Optional)
                 </ThemedText>
-                <TextInput
-                  style={{
-                    borderWidth: 1,
-                    borderColor: '#D1D5DB',
-                    borderRadius: 8,
-                    padding: 12,
-                    fontSize: 14,
-                    color: '#111827',
-                  }}
-                  placeholder="https://example.com/image.jpg"
-                  value={announcementForm.image || ''}
-                  onChangeText={(text) => setAnnouncementForm(prev => ({ ...prev, image: text }))}
-                />
+                
+                {!selectedAnnouncementImage && (
+                  <TouchableOpacity
+                    style={{
+                      borderWidth: 2,
+                      borderColor: '#D1D5DB',
+                      borderStyle: 'dashed',
+                      borderRadius: 8,
+                      padding: 20,
+                      alignItems: 'center',
+                      backgroundColor: '#F9FAFB',
+                      marginBottom: 12,
+                    }}
+                    onPress={pickAnnouncementImage}
+                  >
+                    <IconSymbol name="photo" size={32} color="#6B7280" />
+                    <ThemedText style={{ fontSize: 14, color: '#6B7280', marginTop: 8 }}>
+                      Choose from gallery
+                    </ThemedText>
+                  </TouchableOpacity>
+                )}
+
+                {selectedAnnouncementImage && (
+                  <View style={{ marginBottom: 12 }}>
+                    <Image
+                      source={{ uri: selectedAnnouncementImage }}
+                      style={{
+                        width: '100%',
+                        height: 200,
+                        borderRadius: 8,
+                        marginBottom: 8,
+                      }}
+                      resizeMode="cover"
+                    />
+                    <TouchableOpacity
+                      style={{
+                        backgroundColor: '#ff4444',
+                        padding: 8,
+                        borderRadius: 6,
+                        alignItems: 'center',
+                      }}
+                      onPress={removeAnnouncementImage}
+                    >
+                      <ThemedText style={{ color: 'white', fontSize: 14 }}>Remove Image</ThemedText>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {!selectedAnnouncementImage && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: '#D1D5DB' }} />
+                    <ThemedText style={{ marginHorizontal: 12, color: '#6B7280', fontSize: 12 }}>
+                      OR
+                    </ThemedText>
+                    <View style={{ flex: 1, height: 1, backgroundColor: '#D1D5DB' }} />
+                  </View>
+                )}
+
+                {!selectedAnnouncementImage && (
+                  <TextInput
+                    style={{
+                      borderWidth: 1,
+                      borderColor: '#D1D5DB',
+                      borderRadius: 8,
+                      padding: 12,
+                      fontSize: 14,
+                      color: '#111827',
+                    }}
+                    placeholder="https://example.com/image.jpg"
+                    value={announcementForm.image || ''}
+                    onChangeText={(text) => setAnnouncementForm(prev => ({ ...prev, image: text }))}
+                  />
+                )}
               </View>
               
               <View style={{
@@ -3302,23 +3395,87 @@ export default function OrganizationDetailScreen() {
 
               <View style={{ marginBottom: 16 }}>
                 <ThemedText style={{ fontSize: 14, fontWeight: '500', color: colors.text, marginBottom: 8 }}>
-                  Media URL (Optional)
+                  Image (Optional)
                 </ThemedText>
-                <TextInput
-                  style={{
-                    borderWidth: 1,
-                    borderColor: colors.border,
-                    borderRadius: 8,
-                    padding: 12,
-                    fontSize: 14,
-                    color: colors.text,
-                    backgroundColor: colors.card,
-                  }}
-                  placeholder="https://example.com/image.jpg"
-                  placeholderTextColor={colors.tabIconDefault}
-                  value={postForm.media_url || ''}
-                  onChangeText={(text) => setPostForm(prev => ({ ...prev, media_url: text }))}
-                />
+                
+                {/* Image Picker Button */}
+                {!selectedPostImage && (
+                  <TouchableOpacity
+                    style={{
+                      borderWidth: 2,
+                      borderColor: colors.border,
+                      borderStyle: 'dashed',
+                      borderRadius: 8,
+                      padding: 20,
+                      alignItems: 'center',
+                      backgroundColor: colors.card,
+                      marginBottom: 12,
+                    }}
+                    onPress={pickPostImage}
+                  >
+                    <IconSymbol name="photo" size={32} color={colors.tabIconDefault} />
+                    <ThemedText style={{ fontSize: 14, color: colors.tabIconDefault, marginTop: 8 }}>
+                      Choose from gallery
+                    </ThemedText>
+                  </TouchableOpacity>
+                )}
+
+                {/* Image Preview */}
+                {selectedPostImage && (
+                  <View style={{ marginBottom: 12 }}>
+                    <Image
+                      source={{ uri: selectedPostImage }}
+                      style={{
+                        width: '100%',
+                        height: 200,
+                        borderRadius: 8,
+                        marginBottom: 8,
+                      }}
+                      resizeMode="cover"
+                    />
+                    <TouchableOpacity
+                      style={{
+                        backgroundColor: '#ff4444',
+                        padding: 8,
+                        borderRadius: 6,
+                        alignItems: 'center',
+                      }}
+                      onPress={removePostImage}
+                    >
+                      <ThemedText style={{ color: 'white', fontSize: 14 }}>Remove Image</ThemedText>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* OR Divider */}
+                {!selectedPostImage && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+                    <ThemedText style={{ marginHorizontal: 12, color: colors.tabIconDefault, fontSize: 12 }}>
+                      OR
+                    </ThemedText>
+                    <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+                  </View>
+                )}
+
+                {/* URL Input */}
+                {!selectedPostImage && (
+                  <TextInput
+                    style={{
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      borderRadius: 8,
+                      padding: 12,
+                      fontSize: 14,
+                      color: colors.text,
+                      backgroundColor: colors.card,
+                    }}
+                    placeholder="https://example.com/image.jpg"
+                    placeholderTextColor={colors.tabIconDefault}
+                    value={postForm.media_url || ''}
+                    onChangeText={(text) => setPostForm(prev => ({ ...prev, media_url: text }))}
+                  />
+                )}
               </View>
 
               <View style={{ marginBottom: 20 }}>
