@@ -16,6 +16,7 @@ import {
   TextInput,
   Dimensions,
   Modal,
+  Clipboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/components/ui/IconSymbol';
@@ -375,7 +376,7 @@ export default function OrganizationDetailScreen() {
     media_url: '',
     visibility: 'public'
   });
-  const [selectedPostImage, setSelectedPostImage] = useState<string | null>(null);
+  const [selectedPostImages, setSelectedPostImages] = useState<string[]>([]);
   const [isCreatingPost, setIsCreatingPost] = useState(false);
   const [isUpdatingPost, setIsUpdatingPost] = useState(false);
   
@@ -403,6 +404,10 @@ export default function OrganizationDetailScreen() {
   const [votersSearchQuery, setVotersSearchQuery] = useState('');
   const [selectedOptionFilter, setSelectedOptionFilter] = useState('all');
   const [selectedPollForVoters, setSelectedPollForVoters] = useState<any>(null);
+  
+  // Actions menu state for members
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [isLeaving, setIsLeaving] = useState(false);
   
   const MEMBERS_PER_PAGE = 10;
 
@@ -574,6 +579,65 @@ export default function OrganizationDetailScreen() {
       Alert.alert('Error', 'Failed to submit join request. Please try again.');
     } finally {
       setIsJoining(false);
+    }
+  };
+
+  // Handle leave organization
+  const handleLeaveOrganization = async () => {
+    if (!user?.supabaseUser?.id || isLeaving) return;
+
+    Alert.alert(
+      'Leave Organization',
+      `Are you sure you want to leave ${organization?.name}? This action cannot be undone.`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            setIsLeaving(true);
+            try {
+              const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/organizations/${id}/leave`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                credentials: 'include',
+              });
+
+              if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to leave organization');
+              }
+
+              Alert.alert('Success', 'You have left the organization successfully.');
+              setIsMember(false);
+              setShowActionsMenu(false);
+              router.back();
+            } catch (error) {
+              console.error('Error leaving organization:', error);
+              Alert.alert('Error', error instanceof Error ? error.message : 'Failed to leave organization. Please try again.');
+            } finally {
+              setIsLeaving(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Handle copy organization ID
+  const handleCopyOrgId = () => {
+    try {
+      Clipboard.setString(id as string);
+      Alert.alert('Success', 'Organization ID copied to clipboard!');
+      setShowActionsMenu(false);
+    } catch (error) {
+      console.error('Error copying to clipboard:', error);
+      Alert.alert('Error', 'Failed to copy organization ID');
     }
   };
 
@@ -797,11 +861,25 @@ export default function OrganizationDetailScreen() {
     try {
       setIsCreatingAnnouncement(true);
       
+      // Upload image to Supabase storage if there's a local image
+      let imageUrl: string | null = null;
+      if (selectedAnnouncementImage) {
+        const uploadedUrls = await uploadImagesToStorage([selectedAnnouncementImage], 'announcement');
+        if (uploadedUrls.length > 0) {
+          imageUrl = uploadedUrls[0];
+        } else {
+          Alert.alert('Warning', 'Failed to upload image. Announcement will be created without image.');
+        }
+      } else if (announcementForm.image.trim()) {
+        // Use URL input if provided
+        imageUrl = announcementForm.image.trim();
+      }
+      
       // Call API to create announcement
       const data = await createAnnouncement(id as string, {
         title: announcementForm.title.trim(),
         content: announcementForm.content.trim(),
-        image: selectedAnnouncementImage || announcementForm.image.trim() || null,
+        image: imageUrl,
         sendToTeams: announcementForm.sendToTeams
       });
 
@@ -901,19 +979,24 @@ export default function OrganizationDetailScreen() {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [16, 9],
+      allowsMultipleSelection: true,
       quality: 0.8,
+      selectionLimit: 10,
     });
 
-    if (!result.canceled && result.assets[0]) {
-      setSelectedPostImage(result.assets[0].uri);
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const imageUris = result.assets.map(asset => asset.uri);
+      setSelectedPostImages(prev => [...prev, ...imageUris]);
       setPostForm(prev => ({ ...prev, media_url: '' }));
     }
   };
 
-  const removePostImage = () => {
-    setSelectedPostImage(null);
+  const removePostImage = (index: number) => {
+    setSelectedPostImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const removeAllPostImages = () => {
+    setSelectedPostImages([]);
   };
 
   // Image picker for announcements
@@ -946,6 +1029,60 @@ export default function OrganizationDetailScreen() {
     setSelectedAnnouncementImage(null);
   };
 
+  // Upload images directly to Supabase storage
+  const uploadImagesToStorage = async (imageUris: string[], type: 'post' | 'announcement'): Promise<string[]> => {
+    const uploadedUrls: string[] = [];
+    
+    for (const uri of imageUris) {
+      try {
+        // Get file extension
+        const filename = uri.split('/').pop() || `${type}-${Date.now()}.jpg`;
+        const match = /\.(\w+)$/.exec(filename);
+        const ext = match ? match[1] : 'jpg';
+        
+        // Generate unique filename
+        const uniqueFilename = `${type}-${Date.now()}-${Math.random().toString(36).substring(7)}.${ext}`;
+        const filePath = type === 'post' 
+          ? `org_posts/${id}/${uniqueFilename}`
+          : `org_announcements/${id}/${uniqueFilename}`;
+        
+        // Read file and convert to ArrayBuffer
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as ArrayBuffer);
+          reader.onerror = reject;
+          reader.readAsArrayBuffer(blob);
+        });
+        
+        // Upload to Supabase storage
+        const { data, error } = await supabase.storage
+          .from('post-images')
+          .upload(filePath, arrayBuffer, {
+            contentType: `image/${ext}`,
+            upsert: false
+          });
+        
+        if (error) {
+          Alert.alert('Upload Error', `Failed to upload image: ${error.message}`);
+          continue;
+        }
+        
+        // Get public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('post-images')
+          .getPublicUrl(filePath);
+        
+        uploadedUrls.push(publicUrl);
+      } catch (error) {
+        Alert.alert('Upload Error', `Failed to upload image: ${error}`);
+      }
+    }
+    
+    return uploadedUrls;
+  };
+
   // Handle create post
   const handleCreatePost = async () => {
     if (!postForm.title.trim() || !postForm.content.trim()) {
@@ -956,10 +1093,23 @@ export default function OrganizationDetailScreen() {
     try {
       setIsCreatingPost(true);
       
+      // Upload images to Supabase storage if there are local images
+      let mediaUrls: string[] = [];
+      if (selectedPostImages.length > 0) {
+        mediaUrls = await uploadImagesToStorage(selectedPostImages, 'post');
+        if (mediaUrls.length === 0 && selectedPostImages.length > 0) {
+          Alert.alert('Warning', 'Failed to upload images. Post will be created without images.');
+        }
+      } else if (postForm.media_url.trim()) {
+        // Use URL input if provided
+        mediaUrls = [postForm.media_url.trim()];
+      }
+      
       const data = await createPost(id as string, {
         title: postForm.title.trim(),
         content: postForm.content.trim(),
-        media_url: selectedPostImage || postForm.media_url.trim() || null,
+        media_url: mediaUrls.length > 0 ? mediaUrls[0] : null, // First image for backward compatibility
+        media_urls: mediaUrls.length > 0 ? mediaUrls : null, // Array of all images
         visibility: postForm.visibility
       });
       
@@ -976,7 +1126,7 @@ export default function OrganizationDetailScreen() {
       setPosts(prev => [data.post, ...prev]);
       setShowPostModal(false);
       setPostForm({ title: '', content: '', media_url: '', visibility: 'public' });
-      setSelectedPostImage(null);
+      setSelectedPostImages([]);
       Alert.alert('Success', 'Post created successfully!');
     } catch (error) {
       console.error('Failed to create post:', error);
@@ -2466,15 +2616,25 @@ export default function OrganizationDetailScreen() {
                     {members.length} members
                   </ThemedText>
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.redditJoinButton, { backgroundColor: isMember ? '#800020' : '#800020', opacity: isMember ? 0.7 : 1 }]}
-                  onPress={isMember ? undefined : () => setShowJoinModal(true)}
-                  disabled={isMember || isJoining || hasApplied}
-                >
-                  <ThemedText style={styles.redditJoinButtonText}>
-                    {hasApplied ? 'Pending' : (isMember ? 'Joined' : 'Join')}
-                  </ThemedText>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <TouchableOpacity 
+                    style={[styles.redditJoinButton, { backgroundColor: isMember ? '#800020' : '#800020', opacity: isMember ? 0.7 : 1 }]}
+                    onPress={isMember ? undefined : () => setShowJoinModal(true)}
+                    disabled={isMember || isJoining || hasApplied}
+                  >
+                    <ThemedText style={styles.redditJoinButtonText}>
+                      {hasApplied ? 'Pending' : (isMember ? 'Joined' : 'Join')}
+                    </ThemedText>
+                  </TouchableOpacity>
+                  {isMember && (
+                    <TouchableOpacity
+                      onPress={() => setShowActionsMenu(true)}
+                      style={[styles.actionsButton, { backgroundColor: colors.card, borderColor: colors.border }]}
+                    >
+                      <IconSymbol name="ellipsis" size={20} color={colors.text} />
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
             </View>
           </View>
@@ -2868,6 +3028,78 @@ export default function OrganizationDetailScreen() {
                 </TouchableOpacity>
               ))}
             </ScrollView>
+          </View>
+        </View>
+      )}
+
+      {/* Actions Menu for Members */}
+      {showActionsMenu && (
+        <View style={styles.menuOverlay}>
+          <TouchableOpacity 
+            style={styles.menuBackdrop} 
+            onPress={() => setShowActionsMenu(false)}
+            activeOpacity={1}
+          />
+          <View style={[styles.actionsMenuContainer, { paddingBottom: Math.max(insets.bottom, 16) + 18, backgroundColor: colors.card }]}>
+            <View style={styles.orgMenuHeader}>
+              <ThemedText style={[styles.orgMenuTitle, { color: colors.text }]}>Actions</ThemedText>
+              <TouchableOpacity 
+                onPress={() => setShowActionsMenu(false)}
+                style={styles.closeButton}
+              >
+                <IconSymbol name="xmark" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.actionsMenuContent}>
+              <TouchableOpacity
+                style={[styles.actionMenuItem, { borderBottomColor: colors.border }]}
+                onPress={() => {
+                  setShowActionsMenu(false);
+                  setActiveTab('members');
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={styles.actionMenuItemIcon}>
+                  <IconSymbol name="person.2" size={20} color="#800020" />
+                </View>
+                <View style={styles.actionMenuItemContent}>
+                  <ThemedText style={[styles.actionMenuItemTitle, { color: colors.text }]}>View Members</ThemedText>
+                </View>
+                <IconSymbol name="chevron.right" size={16} color="#D1D5DB" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionMenuItem, { borderBottomColor: colors.border }]}
+                onPress={handleCopyOrgId}
+                activeOpacity={0.7}
+              >
+                <View style={styles.actionMenuItemIcon}>
+                  <IconSymbol name="doc.on.doc" size={20} color="#800020" />
+                </View>
+                <View style={styles.actionMenuItemContent}>
+                  <ThemedText style={[styles.actionMenuItemTitle, { color: colors.text }]}>Copy Organization ID</ThemedText>
+                </View>
+                <IconSymbol name="chevron.right" size={16} color="#D1D5DB" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.actionMenuItem}
+                onPress={handleLeaveOrganization}
+                disabled={isLeaving}
+                activeOpacity={0.7}
+              >
+                <View style={styles.actionMenuItemIcon}>
+                  <IconSymbol name="person.badge.minus" size={20} color="#DC2626" />
+                </View>
+                <View style={styles.actionMenuItemContent}>
+                  <ThemedText style={[styles.actionMenuItemTitle, { color: '#DC2626' }]}>
+                    {isLeaving ? 'Leaving...' : 'Leave Organization'}
+                  </ThemedText>
+                </View>
+                <IconSymbol name="chevron.right" size={16} color="#D1D5DB" />
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       )}
@@ -3399,40 +3631,64 @@ export default function OrganizationDetailScreen() {
                 </ThemedText>
                 
                 {/* Image Picker Button */}
-                {!selectedPostImage && (
-                  <TouchableOpacity
-                    style={{
-                      borderWidth: 2,
-                      borderColor: colors.border,
-                      borderStyle: 'dashed',
-                      borderRadius: 8,
-                      padding: 20,
-                      alignItems: 'center',
-                      backgroundColor: colors.card,
-                      marginBottom: 12,
-                    }}
-                    onPress={pickPostImage}
-                  >
-                    <IconSymbol name="photo" size={32} color={colors.tabIconDefault} />
-                    <ThemedText style={{ fontSize: 14, color: colors.tabIconDefault, marginTop: 8 }}>
-                      Choose from gallery
+                <TouchableOpacity
+                  style={{
+                    borderWidth: 2,
+                    borderColor: colors.border,
+                    borderStyle: 'dashed',
+                    borderRadius: 8,
+                    padding: 20,
+                    alignItems: 'center',
+                    backgroundColor: colors.card,
+                    marginBottom: 12,
+                  }}
+                  onPress={pickPostImage}
+                >
+                  <IconSymbol name="photo" size={32} color={colors.tabIconDefault} />
+                  <ThemedText style={{ fontSize: 14, color: colors.tabIconDefault, marginTop: 8 }}>
+                    {selectedPostImages.length > 0 ? 'Add more images' : 'Choose from gallery'}
+                  </ThemedText>
+                  {selectedPostImages.length > 0 && (
+                    <ThemedText style={{ fontSize: 12, color: colors.tabIconDefault, marginTop: 4 }}>
+                      {selectedPostImages.length} image{selectedPostImages.length !== 1 ? 's' : ''} selected
                     </ThemedText>
-                  </TouchableOpacity>
-                )}
+                  )}
+                </TouchableOpacity>
 
-                {/* Image Preview */}
-                {selectedPostImage && (
+                {/* Multiple Images Preview */}
+                {selectedPostImages.length > 0 && (
                   <View style={{ marginBottom: 12 }}>
-                    <Image
-                      source={{ uri: selectedPostImage }}
-                      style={{
-                        width: '100%',
-                        height: 200,
-                        borderRadius: 8,
-                        marginBottom: 8,
-                      }}
-                      resizeMode="cover"
-                    />
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                      {selectedPostImages.map((uri, index) => (
+                        <View key={index} style={{ position: 'relative', width: '48%' }}>
+                          <Image
+                            source={{ uri }}
+                            style={{
+                              width: '100%',
+                              height: 120,
+                              borderRadius: 8,
+                            }}
+                            resizeMode="cover"
+                          />
+                          <TouchableOpacity
+                            style={{
+                              position: 'absolute',
+                              top: 4,
+                              right: 4,
+                              backgroundColor: '#ff4444',
+                              borderRadius: 12,
+                              width: 24,
+                              height: 24,
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                            }}
+                            onPress={() => removePostImage(index)}
+                          >
+                            <IconSymbol name="xmark" size={14} color="white" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
                     <TouchableOpacity
                       style={{
                         backgroundColor: '#ff4444',
@@ -3440,15 +3696,15 @@ export default function OrganizationDetailScreen() {
                         borderRadius: 6,
                         alignItems: 'center',
                       }}
-                      onPress={removePostImage}
+                      onPress={removeAllPostImages}
                     >
-                      <ThemedText style={{ color: 'white', fontSize: 14 }}>Remove Image</ThemedText>
+                      <ThemedText style={{ color: 'white', fontSize: 14 }}>Remove All Images</ThemedText>
                     </TouchableOpacity>
                   </View>
                 )}
 
                 {/* OR Divider */}
-                {!selectedPostImage && (
+                {selectedPostImages.length === 0 && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
                     <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
                     <ThemedText style={{ marginHorizontal: 12, color: colors.tabIconDefault, fontSize: 12 }}>
@@ -3459,7 +3715,7 @@ export default function OrganizationDetailScreen() {
                 )}
 
                 {/* URL Input */}
-                {!selectedPostImage && (
+                {selectedPostImages.length === 0 && (
                   <TextInput
                     style={{
                       borderWidth: 1,
@@ -6309,5 +6565,48 @@ const styles = StyleSheet.create({
   selectText: {
     fontSize: 16,
     color: '#374151',
+  },
+  
+  // Actions button and menu styles
+  actionsButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actionsMenuContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    maxHeight: '50%',
+  },
+  actionsMenuContent: {
+    paddingTop: 12,
+  },
+  actionMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  actionMenuItemIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FEE2E2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  actionMenuItemContent: {
+    flex: 1,
+  },
+  actionMenuItemTitle: {
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

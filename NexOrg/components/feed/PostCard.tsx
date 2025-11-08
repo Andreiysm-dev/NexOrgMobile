@@ -445,7 +445,10 @@ export function PostCard({ post, onPress, onLikeUpdate, showActions, onPin, onEd
             </ThemedText>
           </TouchableOpacity>
           
-          <TouchableOpacity style={[styles.actionButton, { backgroundColor: 'transparent', borderColor }]}>
+          <TouchableOpacity 
+            style={[styles.actionButton, { backgroundColor: 'transparent', borderColor }]}
+            onPress={onPress}
+          >
             <IconSymbol name="message" size={16} color={metaColor} />
             <ThemedText style={[styles.actionText, { color: metaColor }]}>
               {commentCount}

@@ -1446,6 +1446,7 @@ export const createPost = async (orgId: string, postData: {
   title: string;
   content: string;
   media_url?: string | null;
+  media_urls?: string[] | null;
   visibility: string;
 }): Promise<any> => {
   try {
@@ -1465,10 +1466,11 @@ export const createPost = async (orgId: string, postData: {
         title: postData.title,
         content: postData.content,
         media_url: postData.media_url,
+        media_urls: postData.media_urls,
         visibility: postData.visibility,
         author_id: authorId
       })
-      .select('post_id, org_id, title, content, created_at, media_url, visibility, author_id')
+      .select('post_id, org_id, title, content, created_at, media_url, media_urls, visibility, author_id')
       .single();
 
     if (error) {
