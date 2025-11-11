@@ -28,6 +28,8 @@ import { supabase } from '@/lib/supabase';
 import { PostCard } from '@/components/feed/PostCard';
 import { AnnouncementCard } from '@/components/feed/AnnouncementCard';
 import { PollCard } from '@/components/feed/PollCard';
+import { logPostCreate, logPostDelete, logAnnouncementCreate, logAnnouncementDelete } from '@/lib/auditLog';
+import { createAuditLogViaWebAPI } from '@/lib/api_web';
 import { PostModal } from '@/components/feed/PostModal';
 // Image picker - requires native rebuild for remote users
 let ImagePicker: any = null;
@@ -883,6 +885,23 @@ export default function OrganizationDetailScreen() {
         sendToTeams: announcementForm.sendToTeams
       });
 
+      // Create audit log for announcement creation
+      if (user?.supabaseUser && data.announcement) {
+        const { data: actorProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('user_id', user.supabaseUser.id)
+          .single();
+        
+        await logAnnouncementCreate(
+          id as string,
+          user.supabaseUser.id,
+          actorProfile?.full_name || user.name || 'User',
+          data.announcement.announcement_id,
+          data.announcement.title || 'Untitled Announcement'
+        );
+      }
+
       setAnnouncements(prev => [data.announcement, ...prev]);
       setShowAnnouncementModal(false);
       setAnnouncementForm({ title: '', content: '', image: '', sendToTeams: false });
@@ -1122,6 +1141,23 @@ export default function OrganizationDetailScreen() {
         Alert.alert('Error', 'Failed to create post');
         return;
       }
+
+      // Create audit log for post creation
+      if (user?.supabaseUser) {
+        const { data: actorProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('user_id', user.supabaseUser.id)
+          .single();
+        
+        await logPostCreate(
+          id as string,
+          user.supabaseUser.id,
+          actorProfile?.full_name || user.name || 'User',
+          data.post.post_id,
+          data.post.title || 'Untitled Post'
+        );
+      }
       
       setPosts(prev => [data.post, ...prev]);
       setShowPostModal(false);
@@ -1339,6 +1375,56 @@ export default function OrganizationDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Test: Create audit logs using multiple approaches
+              if (user?.supabaseUser) {
+                console.log('Testing multiple audit log approaches...');
+                
+                // Test 1: Direct Supabase insert
+                try {
+                  console.log('Test 1: Direct Supabase insert');
+                  const testAuditLog = {
+                    org_id: id as string,
+                    user_id: user.supabaseUser.id,
+                    action_type: 'post_delete',
+                    action_description: `Direct: Deleting post "${post.title}"`,
+                    target_type: 'post',
+                    target_id: post.post_id,
+                    target_name: post.title || 'Untitled Post',
+                    details: { method: 'direct_supabase' }
+                  };
+                  
+                  const { data: testResult, error: testError } = await supabase
+                    .from('audit_logs')
+                    .insert(testAuditLog)
+                    .select();
+                  
+                  if (testError) {
+                    console.error('Direct audit log failed:', testError);
+                  } else {
+                    console.log('Direct audit log success:', testResult);
+                  }
+                } catch (testErr) {
+                  console.error('Direct audit log exception:', testErr);
+                }
+                
+                // Test 2: Web API approach
+                try {
+                  console.log('Test 2: Web API approach');
+                  await createAuditLogViaWebAPI(
+                    id as string,
+                    'post_delete',
+                    `WebAPI: Deleting post "${post.title}"`,
+                    'post',
+                    post.post_id,
+                    post.title || 'Untitled Post',
+                    { method: 'web_api' }
+                  );
+                  console.log('Web API audit log success');
+                } catch (webErr) {
+                  console.error('Web API audit log failed:', webErr);
+                }
+              }
+              
               await deletePost(id as string, post.post_id);
               setPosts(prev => prev.filter(p => p.post_id !== post.post_id));
               Alert.alert('Success', 'Post deleted successfully!');

@@ -16,6 +16,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { IconSymbol } from '@/components/ui/IconSymbol';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/lib/supabase';
+import { logMemberJoin, logMemberKick } from '@/lib/auditLog';
 
 const { width } = Dimensions.get('window');
 
@@ -236,6 +237,27 @@ export default function MembersManagement() {
         return;
       }
 
+      // Create audit log for approved members
+      if (action === 'approve' && user?.supabaseUser) {
+        const request = joinRequests.find(req => req.member_request_id === requestId);
+        if (request) {
+          // Get current user's profile for actor name
+          const { data: actorProfile } = await supabase
+            .from('profiles')
+            .select('full_name')
+            .eq('user_id', user.supabaseUser.id)
+            .single();
+          
+          await logMemberJoin(
+            id as string,
+            user.supabaseUser.id,
+            actorProfile?.full_name || 'Officer',
+            request.user_id,
+            request.profiles.full_name
+          );
+        }
+      }
+
       // Refresh the data
       await fetchMembersAndRequests();
       
@@ -313,6 +335,24 @@ export default function MembersManagement() {
                 console.error('Error removing member:', error);
                 Alert.alert('Error', 'Failed to remove member');
                 return;
+              }
+
+              // Create audit log for member removal
+              if (user?.supabaseUser) {
+                const { data: actorProfile } = await supabase
+                  .from('profiles')
+                  .select('full_name')
+                  .eq('user_id', user.supabaseUser.id)
+                  .single();
+                
+                await logMemberKick(
+                  id as string,
+                  user.supabaseUser.id,
+                  actorProfile?.full_name || 'Officer',
+                  userId,
+                  memberName,
+                  'Removed by officer'
+                );
               }
               
               // Refetch to get updated data

@@ -1219,8 +1219,21 @@ export const updateAnnouncement = async (orgId: string, announcementId: string, 
  */
 export const deleteAnnouncement = async (orgId: string, announcementId: string): Promise<void> => {
   try {
+    // Get current user
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
 
+    // Get announcement title before deleting (for audit log)
+    const { data: announcementData } = await supabase
+      .from('announcements')
+      .select('title')
+      .eq('announcement_id', announcementId)
+      .eq('org_id', orgId)
+      .single();
+
+    const announcementTitle = announcementData?.title || 'Untitled Announcement';
     
+    // Delete the announcement
     const { error } = await supabase
       .from('announcements')
       .delete()
@@ -1232,6 +1245,35 @@ export const deleteAnnouncement = async (orgId: string, announcementId: string):
       throw new Error(`Failed to delete announcement: ${error.message}`);
     }
 
+    // Create audit log (same as web version)
+    try {
+      const { data: actorProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('user_id', user.id)
+        .single();
+
+      const actorName = actorProfile?.full_name || 'User';
+
+      await supabase
+        .from('audit_logs')
+        .insert({
+          org_id: orgId,
+          user_id: user.id,
+          action_type: 'announcement_delete',
+          action_description: `${actorName} deleted an announcement: "${announcementTitle}"`,
+          target_type: 'announcement',
+          target_id: announcementId,
+          target_name: announcementTitle,
+          details: {},
+          created_at: new Date().toISOString()
+        });
+
+      console.log('Audit log created for announcement deletion:', announcementId, announcementTitle);
+    } catch (auditError) {
+      console.error('Failed to create audit log for announcement deletion:', auditError);
+      // Don't fail the request if audit logging fails
+    }
 
   } catch (error) {
     console.error('Error deleting announcement:', error);
@@ -1527,8 +1569,21 @@ export const updatePost = async (orgId: string, postId: string, postData: {
  */
 export const deletePost = async (orgId: string, postId: string): Promise<void> => {
   try {
+    // Get current user
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
 
+    // Get post title before deleting (for audit log)
+    const { data: postData } = await supabase
+      .from('organization_posts')
+      .select('title')
+      .eq('post_id', postId)
+      .eq('org_id', orgId)
+      .single();
+
+    const postTitle = postData?.title || 'Untitled Post';
     
+    // Delete the post
     const { error } = await supabase
       .from('organization_posts')
       .delete()
@@ -1540,6 +1595,49 @@ export const deletePost = async (orgId: string, postId: string): Promise<void> =
       throw new Error(`Failed to delete post: ${error.message}`);
     }
 
+    // Create audit log (same as web version)
+    try {
+      console.log('Starting audit log creation for post deletion...');
+      
+      const { data: actorProfile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('user_id', user.id)
+        .single();
+
+      const actorName = actorProfile?.full_name || 'User';
+      
+      console.log('Actor profile fetched:', actorName);
+      
+      const auditLogData = {
+        org_id: orgId,
+        user_id: user.id,
+        action_type: 'post_delete',
+        action_description: `${actorName} deleted a post: "${postTitle}"`,
+        target_type: 'post',
+        target_id: postId,
+        target_name: postTitle,
+        details: {},
+        ip_address: null,
+        user_agent: null
+      };
+      
+      console.log('Inserting audit log data:', auditLogData);
+
+      const { data: auditResult, error: auditError } = await supabase
+        .from('audit_logs')
+        .insert(auditLogData)
+        .select();
+
+      if (auditError) {
+        console.error('Supabase audit log error:', auditError);
+      } else {
+        console.log('Audit log created successfully:', auditResult);
+      }
+    } catch (auditError) {
+      console.error('Exception in audit log creation:', auditError);
+      // Don't fail the request if audit logging fails
+    }
 
   } catch (error) {
     console.error('Error deleting post:', error);

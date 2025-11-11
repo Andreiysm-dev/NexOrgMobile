@@ -18,6 +18,8 @@ import { IconSymbol } from '@/components/ui/IconSymbol';
 import { useAuth } from '@/hooks/useAuth';
 import { fetchOrganizationById, updateOrganization } from '@/lib/api';
 import { canPostAnnouncements, canManageMembers } from '@/lib/mockRoles';
+import { logSettingsChange } from '@/lib/auditLog';
+import { supabase } from '@/lib/supabase';
 
 const { width } = Dimensions.get('window');
 
@@ -161,6 +163,22 @@ export default function OrganizationSettings() {
       
       // Update the organization using the API
       await updateOrganization(organization.id, formData);
+
+      // Create audit log for settings change
+      if (user?.supabaseUser) {
+        const { data: actorProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('user_id', user.supabaseUser.id)
+          .single();
+        
+        await logSettingsChange(
+          organization.id,
+          user.supabaseUser.id,
+          actorProfile?.full_name || user.name || 'User',
+          formData
+        );
+      }
       
       Alert.alert(
         'Success', 
@@ -416,6 +434,27 @@ export default function OrganizationSettings() {
           <ThemedText style={styles.helperText}>
             Add social media links and contact information for your organization
           </ThemedText>
+        </View>
+
+        {/* Audit Log Section */}
+        <View style={styles.section}>
+          <ThemedText style={styles.sectionTitle}>Audit Log</ThemedText>
+          
+          <TouchableOpacity 
+            style={styles.auditLogButton}
+            onPress={() => router.push(`/organization/${id}/audit-logs`)}
+          >
+            <View style={styles.auditLogIcon}>
+              <IconSymbol name="clock" size={20} color="#800020" />
+            </View>
+            <View style={styles.auditLogContent}>
+              <ThemedText style={styles.auditLogTitle}>View Audit Logs</ThemedText>
+              <ThemedText style={styles.auditLogDescription}>
+                Track all organization activity and changes
+              </ThemedText>
+            </View>
+            <IconSymbol name="chevron.right" size={16} color="#6B7280" />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.bottomPadding} />
@@ -768,5 +807,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#111827',
     flex: 1,
+  },
+  auditLogButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    gap: 12,
+  },
+  auditLogIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FEF2F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  auditLogContent: {
+    flex: 1,
+  },
+  auditLogTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  auditLogDescription: {
+    fontSize: 14,
+    color: '#6B7280',
   },
 });
