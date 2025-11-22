@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "NexOrg_Mobile_Application",
-    "slug": "NexOrg_Mobile_Application",
+    "name": "NexOrg",
+    "slug": "nexorg-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
